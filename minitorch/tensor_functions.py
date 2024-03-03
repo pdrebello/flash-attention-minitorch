@@ -65,6 +65,7 @@ class Function:
         back = None
         if need_grad:
             back = minitorch.History(cls, ctx, vals)
+        
         return minitorch.Tensor(c._tensor, back, backend=c.backend)
 
 
@@ -141,8 +142,11 @@ class PowerScalar(Function):
             output : Tensor
                 Tensor containing the result of raising every element of a to scalar.
         """
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        ### BEGIN YOUR SOLUTION
+        out = a.f.pow_scalar_zip(a, scalar)
+        ctx.save_for_backward(a, scalar)
+        return out
+        ### END YOUR SOLUTION
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, float]:
@@ -167,10 +171,11 @@ class PowerScalar(Function):
         grad_a    = None
         
         # COPY FROM ASSIGN2_1
-        raise NotImplementedError
-
+        ### BEGIN YOUR SOLUTION
+        out = a.f.pow_scalar_zip(a, scalar-1)
+        grad_a = scalar * out * grad_output
+        ### END YOUR SOLUTION
         return (grad_a, 0.0)
-
 
 class Tanh(Function):
     @staticmethod
@@ -190,8 +195,11 @@ class Tanh(Function):
             output : Tensor
                 Tensor containing the element-wise tanh of a.
         """
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        ### BEGIN YOUR SOLUTION
+        out = a.f.tanh_map(a)
+        ctx.save_for_backward(out)
+        return out
+        ### END YOUR SOLUTION
     
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tensor:
@@ -210,8 +218,9 @@ class Tanh(Function):
                 gradient_for_a must be the correct element-wise gradient for tanh.
         """
         # COPY FROM ASSIGN2_1
-        raise NotImplementedError
-
+        tanh = ctx.saved_values[0]
+        grad_a = ((-tanh * tanh)  + 1.0) * grad_output
+        return grad_a
 
 class Sigmoid(Function):
     @staticmethod
@@ -419,13 +428,19 @@ class Attn_Softmax(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1 
-      raise NotImplementedError("Need to implement for Assignment 3")
+      #raise NotImplementedError("Need to implement for Assignment 3
+      print((inp.shape, mask.shape))
+      soft_input = inp.f.attn_softmax_fw(inp, mask)
+      ctx.save_for_backward(soft_input, mask)
+      return soft_input
       #   END ASSIGN3_1
 
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1 
-      raise NotImplementedError("Need to implement for Assignment 3")
+      #raise NotImplementedError("Need to implement for Assignment 3")
+      (soft_input,mask) = ctx.saved_values
+      return out_grad.f.attn_softmax_bw(out_grad, soft_input), mask.zeros(mask.shape)
       #   END ASSIGN3_1
 
 
@@ -433,7 +448,8 @@ class LayerNorm(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, gamma: Tensor, beta: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_2 
-      raise NotImplementedError("Need to implement for Assignment 3")
+      #raise NotImplementedError("Need to implement for Assignment 3")
+      return inp.f.layernorm_fw(inp, gamma, beta)
       #   END ASSIGN3_2
 
     @staticmethod

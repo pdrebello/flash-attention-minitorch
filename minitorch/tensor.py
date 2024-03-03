@@ -398,6 +398,7 @@ class Tensor:
         assert h.ctx is not None
 
         x = h.last_fn._backward(h.ctx, d_output)
+        print((h.last_fn, len(x), len(h.inputs), h.inputs[0].shape, h.inputs[1].shape))
         assert len(x) == len(h.inputs), f"Bug in function {h.last_fn}"
         return [
             (inp, inp.expand(self._ensure_tensor(d_in)))
