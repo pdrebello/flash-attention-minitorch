@@ -209,8 +209,9 @@ def GELU(input: Tensor) -> Tensor:
     """Applies the GELU activation function with 'tanh' approximation element-wise
     https://pytorch.org/docs/stable/generated/torch.nn.GELU.html
     """
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
+    ### BEGIN YOUR SOLUTION
+    return 0.5 * input * (1+(math.sqrt(2/math.pi) * (input + 0.044715 * (input**3))).tanh())
+    ### END YOUR SOLUTION
 
 
 def logsumexp(input: Tensor, dim: int) -> Tensor:
@@ -225,8 +226,11 @@ def logsumexp(input: Tensor, dim: int) -> Tensor:
         out : The output tensor with the same number of dimensions as input (equiv. to keepdims=True)
             NOTE: minitorch functions/tensor functions typically keep dimensions if you provide a dimensions.
     """  
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
+    ### BEGIN YOUR SOLUTION
+    input_max = max(input, dim)
+    input = (input - input_max).exp().sum(dim).log()
+    return input_max + input
+    ### END YOUR SOLUTION
 
 
 def one_hot(input: Tensor, num_classes: int) -> Tensor:
@@ -236,8 +240,17 @@ def one_hot(input: Tensor, num_classes: int) -> Tensor:
 
     Hint: You may want to use a combination of np.eye, tensor_from_numpy, 
     """
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
+    ### BEGIN YOUR SOLUTION
+    indices = input.to_numpy().flatten().astype(int)
+    one_hot = np.zeros((len(indices), num_classes))
+    one_hot[np.arange(len(indices)), indices] = 1
+    
+    output_shape = input.shape
+    output_shape = (*output_shape, num_classes
+                   )
+    one_hot = one_hot.reshape(output_shape)
+    return tensor_from_numpy(one_hot, backend=input.backend) 
+    ### END YOUR SOLUTION
 
 
 def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
@@ -252,8 +265,10 @@ def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
         loss : (minibatch, )
     """
     result = None
-    
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
-    
+    ### BEGIN YOUR SOLUTION
+    batch_size = logits.shape[0]
+    num_classes = logits.shape[1]
+    one_hot_target = one_hot(target, num_classes)
+    result = logsumexp(logits, dim=1) -  (one_hot_target * logits).sum(dim=1)
+    ### END YOUR SOLUTION
     return result.view(batch_size, )
