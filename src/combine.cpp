@@ -400,8 +400,7 @@ __global__ void zipKernel(
     int* b_shape, 
     int* b_strides,
     int b_shape_size,
-    int fn_id,
-int a_size,int b_size
+    int fn_id
 ) {
   /**
    * Zip function. Apply a binary function to elements of the input array a & b and store the result in the output array.
@@ -451,15 +450,12 @@ int a_size,int b_size
     
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < out_size){
-        
         to_index(i, out_shape, out_index, out_shape_size);
         int o = index_to_position(out_index, out_strides, out_shape_size);
         broadcast_index(out_index, out_shape, out_shape_size, a_index, a_shape, a_shape_size);
         int j = index_to_position(a_index, a_strides, a_shape_size);
         broadcast_index(out_index, out_shape, out_shape_size, b_index, b_shape, b_shape_size);
         int k = index_to_position(b_index, b_strides, b_shape_size);
-        //printf("%d, %d, %d\n", o, j, k);
-        //assert(j < a_size && k < b_size);
         out[o] = fn(fn_id, a_storage[j], b_storage[k]); 
     }
     /// END ASSIGN1_2            
@@ -617,23 +613,20 @@ void tensorZip(
 
     // Allocate device memory
     float *d_out, *d_a, *d_b;
-    //cudaMalloc((void **)&d_a, a_size * sizeof(float));
+    cudaMalloc((void **)&d_a, a_size * sizeof(float));
     cudaMalloc(&d_b, b_size * sizeof(float));
+    cudaMalloc(&d_out, out_size * sizeof(float));
 
-    //cudaMalloc(&d_out, out_size * sizeof(float));
-    //cudaMalloc((void **)&d_out, 2 * sizeof(float));
-    
-    /*int *d_out_shape, *d_out_strides, *d_a_shape, *d_a_strides, *d_b_shape, *d_b_strides;
-
+    int *d_out_shape, *d_out_strides, *d_a_shape, *d_a_strides, *d_b_shape, *d_b_strides;
     cudaMalloc(&d_out_shape, out_shape_size * sizeof(int));
     cudaMalloc(&d_out_strides, out_shape_size * sizeof(int));
     cudaMalloc(&d_a_shape, a_shape_size * sizeof(int));
     cudaMalloc(&d_a_strides, a_shape_size * sizeof(int));
     cudaMalloc(&d_b_shape, b_shape_size * sizeof(int));
     cudaMalloc(&d_b_strides, b_shape_size * sizeof(int));
-    */
+
     // Copy data to the device
-    /*cudaMemcpy(d_a, a_storage, a_size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_a, a_storage, a_size * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b_storage, b_size * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_out_shape, out_shape, out_shape_size * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_out_strides, out_strides, out_shape_size * sizeof(int), cudaMemcpyHostToDevice);
@@ -641,23 +634,22 @@ void tensorZip(
     cudaMemcpy(d_a_strides, a_strides, a_shape_size * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b_shape, b_shape, b_shape_size * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b_strides, b_strides, b_shape_size * sizeof(int), cudaMemcpyHostToDevice);
-    
+
     // Launch kernel
     int threadsPerBlock = BASE_THREAD_NUM;
     int blocksPerGrid = (out_size + threadsPerBlock - 1) / threadsPerBlock;
-       */
-    /*zipKernel<<<blocksPerGrid, threadsPerBlock>>>(
+    zipKernel<<<blocksPerGrid, threadsPerBlock>>>(
       d_out, d_out_shape, d_out_strides, out_size, out_shape_size,
       d_a, d_a_shape, d_a_strides, a_shape_size,
       d_b, d_b_shape, d_b_strides, b_shape_size,
-      fn_id, a_size, b_size);*/
+      fn_id);
 
     // Copy back to the host
-    //cudaMemcpy(out, d_out, out_size * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(out, d_out, out_size * sizeof(float), cudaMemcpyDeviceToHost);
     
-    //cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
 
-    
+
     // Check CUDA execution
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -665,9 +657,8 @@ void tensorZip(
       // Handle the error (e.g., by exiting the program)
       exit(EXIT_FAILURE);
     }
-    return;
+
     // Free memory on device
-/*
     cudaFree(d_a);
     cudaFree(d_b);
     cudaFree(d_out);
@@ -676,7 +667,7 @@ void tensorZip(
     cudaFree(d_a_shape);
     cudaFree(d_a_strides);
     cudaFree(d_b_shape);
-    cudaFree(d_b_strides);*/
+    cudaFree(d_b_strides);
 }
 
 

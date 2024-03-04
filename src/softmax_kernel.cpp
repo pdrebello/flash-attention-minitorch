@@ -124,6 +124,7 @@ __global__ void ker_attn_softmax_lt32(T *inp, const T *attn_mask, int from_len,
 template <typename T, int block_dim, int ele_per_thread>
 __global__ void ker_attn_softmax(T *inp, const T *attn_mask, int from_len,
                                  int to_len, bool mask_future) {
+  
   int batch_id = blockIdx.y;
   int head_id = blockIdx.z;
   const int nhead = gridDim.z;
@@ -235,9 +236,9 @@ void launch_attn_softmax(float *inp, const float *attn_mask,
                                 int batch_size, int nhead, int from_len,
                                 int to_len, bool mask_future,
                                 cudaStream_t stream) {
+
   int float_size = sizeof(float);
   int inp_size = batch_size * nhead * from_len * to_len * float_size;
-    printf("Input Size: %d",inp_size);
   int attn_mask_size = batch_size * to_len * float_size;
 
   float *d_inp, *d_attn_mask;
@@ -308,26 +309,28 @@ output: [batch_size, nhead, seq_len, seq_len], output of softmax forward.
 */
 template <typename T, int ITERATIONS>
 __global__ void ker_attn_softmax_bw(T *grad, const T *inp, int softmax_length) {
-  
+
   int batch_idx = blockIdx.x * blockDim.y + threadIdx.y;
   int offset = batch_idx * softmax_length + threadIdx.x;
 
   grad += offset;
   inp += offset;
-
+    
   T grad_reg[ITERATIONS];
   T inp_reg[ITERATIONS];
   float sum = 0.0;
-
+    
   #pragma unroll
   for (int i = 0; i < ITERATIONS; ++i) {
     int curr_idx = threadIdx.x + i * WARP_SIZE;
+    
     if (curr_idx < softmax_length) {
       grad_reg[i] = grad[i * WARP_SIZE];
       inp_reg[i] = inp[i * WARP_SIZE];
       sum += (float)grad_reg[i] * (float)inp_reg[i];
     }
   }
+
   cg::thread_block b = cg::this_thread_block();
   cg::thread_block_tile<WARP_SIZE> g = cg::tiled_partition<WARP_SIZE>(b);
 
@@ -336,11 +339,19 @@ __global__ void ker_attn_softmax_bw(T *grad, const T *inp, int softmax_length) {
   #pragma unroll
   for (int i = 0; i < ITERATIONS; ++i) {
     int curr_idx = threadIdx.x + i * WARP_SIZE;
-    if (curr_idx < softmax_length){ 
-        grad[i * WARP_SIZE] = (T)((float)inp_reg[i] * ((float)grad_reg[i]));
-    }
+    if (curr_idx < softmax_length)
+      grad[i * WARP_SIZE] = (T)((float)inp_reg[i] * ((float)grad_reg[i] - sum));
   }
-  return; 
+}
+
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
 }
 
 // template <typename T>
@@ -352,7 +363,6 @@ void launch_attn_softmax_bw(float *out_grad,
   
   const int warps_per_block = 4;
   dim3 grid_dim(rows / warps_per_block);
-  printf("Warp Size %d, Rows %d, Warps Per Block %d\n", WARP_SIZE, rows, warps_per_block);
   dim3 block_dim(WARP_SIZE, warps_per_block);
   // BEGIN ASSIGN3_1
   
@@ -360,7 +370,7 @@ void launch_attn_softmax_bw(float *out_grad,
   int float_size = sizeof(float);
   int out_grad_size = rows * softmax_len  * float_size;
   int soft_inp_size = rows * softmax_len  * float_size;
-    printf("OutGrad Size: %d",out_grad_size);
+  
 
   float *d_out_grad, *d_soft_inp;
   cudaMalloc((void **)&d_out_grad, out_grad_size);
@@ -372,39 +382,39 @@ void launch_attn_softmax_bw(float *out_grad,
   // Hint: use ker_attn_softmax_bw<float, ITERATIONS> depending on softmax_len
   if (softmax_len <= 32) {
     ker_attn_softmax_bw<float, 32/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   } 
   else if (softmax_len <= 64) {
     ker_attn_softmax_bw<float, 64/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   } 
   else if (softmax_len <= 128) {
     ker_attn_softmax_bw<float, 128/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else if (softmax_len <= 256) {
     ker_attn_softmax_bw<float, 256/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else if (softmax_len <= 384) {
-    ker_attn_softmax_bw<float, 384/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+    ker_attn_softmax_bw<float, 12><<<grid_dim, block_dim, 0, stream>>>(
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else if (softmax_len <= 512) {
     ker_attn_softmax_bw<float, 512/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }   
   else if (softmax_len <= 768) {
     ker_attn_softmax_bw<float, 768/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else if (softmax_len <= 1024) {
     ker_attn_softmax_bw<float, 1024/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else if (softmax_len <= 2048) {
     ker_attn_softmax_bw<float, 2048/WARP_SIZE><<<grid_dim, block_dim, 0, stream>>>(
-        out_grad, soft_inp, softmax_len);
+        d_out_grad, d_soft_inp, softmax_len);
   }  
   else {
     throw std::runtime_error(
@@ -415,11 +425,11 @@ void launch_attn_softmax_bw(float *out_grad,
   cudaMemcpy(out_grad, d_out_grad, out_grad_size, cudaMemcpyDeviceToHost);
   cudaDeviceSynchronize();
   
-  /*cudaError_t err = cudaGetLastError();
+  cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "launch_attn_softmax Error: %s\n", cudaGetErrorString(err));
     exit(EXIT_FAILURE);
-  }*/
+  }
   
   // Free memory on device
   cudaFree(d_out_grad);
