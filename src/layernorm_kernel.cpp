@@ -306,8 +306,6 @@ template <typename T>
 __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
                                const T *gamma, const T *betta, const T *vars,
                                const T *means, int hidden_dim) {
-    //if(blockIdx.x == 0)
-    //printf("%d %d %d | %d %d %d | %d %d %d\n", blockIdx.x, blockIdx.y, blockIdx.z, threadIdx.x, threadIdx.y, threadIdx.z, blockDim.x, blockDim.y, blockDim.z);
     /// BEGIN ASSIGN3_2
     /// TODO
     // Hints:
@@ -319,24 +317,27 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
     // Step 1
     float l_sum = 0;
     float l_square_sum = 0;
-    //const float4 *out_grad_f4 = reinterpret_cast<const float4 *>(out_grad) + blockIdx.x * hidden_dim;
-    //const float4 *gamma_f4 = reinterpret_cast<const float4 *>(gamma) + blockIdx.x * hidden_dim;
     int offset = blockIdx.x;
+    const float4 *inp4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_dim; // + idx;
+    const float4 *out_grad_f4 = reinterpret_cast<const float4 *>(out_grad) + blockIdx.x * hidden_dim; // + idx;
+    const float4 *gamma_f4 = reinterpret_cast<const float4 *>(gamma);// + idx;
+    
     for (uint idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
-        float x_hat = (inp[offset*hidden_dim+idx] - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
-        float gamma_val = gamma[idx];
-        float out_val = out_grad[offset * hidden_dim + idx];
-        l_sum +=        (out_val * gamma_val);
-        l_square_sum += (out_val * gamma_val * x_hat);
-        if (blockIdx.x == 0 && threadIdx.x == 1) {
-            //printf("Sumss %d: %f, %f, %f, %f |%d\n", threadIdx.x, x_hat, gamma_val, out_val, out_val * gamma_val * x_hat, hidden_dim);
-            //printf("Sumss %d: %f, %f\n", threadIdx.x, out_val * gamma_val, out_val * gamma_val * x_hat);
-            //printf("Gamma Val:%f\n", gamma_val);
-            //printf("Out Val:%f\n", out_val);
-            //printf("X Hat:%f\n", x_hat);
-            //printf("L1: %f\n", out_val * gamma_val);
-            //printf("L2: %f\n", out_val * gamma_val * x_hat);
-        }
+        float4 x_hat4; 
+        x_hat4.x = (inp4[idx].x - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.y = (inp4[idx].y - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.z = (inp4[idx].z - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.w = (inp4[idx].w - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+
+        l_sum +=        (out_grad_f4[idx].x * gamma_f4[idx].x + out_grad_f4[idx].y * gamma_f4[idx].y + 
+                        out_grad_f4[idx].z * gamma_f4[idx].z + out_grad_f4[idx].w * gamma_f4[idx].w);
+        l_square_sum += (out_grad_f4[idx].x * gamma_f4[idx].x * x_hat4.x + out_grad_f4[idx].y * gamma_f4[idx].y * x_hat4.y + 
+                        out_grad_f4[idx].z * gamma_f4[idx].z * x_hat4.z + out_grad_f4[idx].w * gamma_f4[idx].w * x_hat4.w);
+        //float x_hat = (inp[offset*hidden_dim+idx] - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        //float gamma_val = gamma[idx];
+        //float out_val = out_grad[offset * hidden_dim + idx];
+        //l_sum +=        (out_val * gamma_val);
+        //l_square_sum += (out_val * gamma_val * x_hat);
     }
     
     // Step 2
@@ -346,21 +347,32 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
     blockReduce<ReduceType::kSum, 2>(block_reduce_sum_sumsq);
 
     __shared__ float s_firstSum, s_secondSum;
-    if (threadIdx.x == 0) {
-        
+    if (threadIdx.x == 0) {     
         s_firstSum = block_reduce_sum_sumsq[0];
         s_secondSum = block_reduce_sum_sumsq[1];
-        //if(blockIdx.x == 0)
-        //printf("FirstSec: %f, %f | %f, %f\n", s_firstSum, s_secondSum, l_sum, l_square_sum);
     }
   __syncthreads();
     // Step 4
-    for (uint idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
-        float x_hat_i = (inp[offset*hidden_dim+idx] - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
-        float temp_val = (s_firstSum + s_secondSum * x_hat_i)/hidden_dim;
-        temp_val = (out_grad[offset * hidden_dim + idx] * gamma[idx]) - temp_val;
-        temp_val *= rsqrtf((float)vars[offset] + LN_EPSILON);
-        inp_grad[offset * hidden_dim + idx] = temp_val;
+    for (uint idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {  
+        float4 x_hat4;// = inp4[idx];
+        x_hat4.x = (inp4[idx].x - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.y = (inp4[idx].y - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.z = (inp4[idx].z - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);
+        x_hat4.w = (inp4[idx].w - means[offset]) * rsqrtf((float)vars[offset] + LN_EPSILON);        
+
+        float4 temp_val;
+        
+        temp_val.x = (out_grad_f4[idx].x * gamma_f4[idx].x) - (s_firstSum + s_secondSum * x_hat4.x)/(hidden_dim*4);
+        temp_val.y = (out_grad_f4[idx].y * gamma_f4[idx].y) - (s_firstSum + s_secondSum * x_hat4.y)/(hidden_dim*4);
+        temp_val.z = (out_grad_f4[idx].z * gamma_f4[idx].z) - (s_firstSum + s_secondSum * x_hat4.z)/(hidden_dim*4);
+        temp_val.w = (out_grad_f4[idx].w * gamma_f4[idx].w) - (s_firstSum + s_secondSum * x_hat4.w)/(hidden_dim*4);        
+
+        temp_val.x *= rsqrtf((float)vars[offset] + LN_EPSILON);
+        temp_val.y *= rsqrtf((float)vars[offset] + LN_EPSILON);
+        temp_val.z *= rsqrtf((float)vars[offset] + LN_EPSILON);
+        temp_val.w *= rsqrtf((float)vars[offset] + LN_EPSILON);
+
+        ((float4 *)inp_grad)[offset * hidden_dim + idx] = temp_val;
     }
     /// END ASSIGN3_2
 }
@@ -409,7 +421,7 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   if (hidden_dim % 4 != 0 || hidden_dim > 4096) {
     throw std::runtime_error("hidden_dim % 4 != 0 || hidden_dim > 4096");
   }
-  //hidden_dim >>= 2;
+  hidden_dim >>= 2;
   int nthread = min(((hidden_dim + 31) / 32) * 32, MAX_THREADS);
 
   ker_ln_bw_dinp<<<batch_size, nthread, 0, stream_2>>>(
