@@ -48,7 +48,7 @@ class Function:
         raw_vals = []
         need_grad = False
         for v in vals:
-            if v.requires_grad:
+            if v.requires_grad():
                 need_grad = True
             raw_vals.append(v.detach())
 
@@ -65,7 +65,6 @@ class Function:
         back = None
         if need_grad:
             back = minitorch.History(cls, ctx, vals)
-        
         return minitorch.Tensor(c._tensor, back, backend=c.backend)
 
 
@@ -423,22 +422,19 @@ class MatMul(Function):
             grad_output.f.matrix_multiply(transpose(t1), grad_output),
         )
 
-
+import copy
 class Attn_Softmax(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1 
-      #raise NotImplementedError("Need to implement for Assignment 3
-      print((inp.shape, mask.shape))
+      ctx.save_for_backward(copy.deepcopy(inp), mask)
       soft_input = inp.f.attn_softmax_fw(inp, mask)
-      ctx.save_for_backward(soft_input, mask)
       return soft_input
       #   END ASSIGN3_1
 
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_1 
-      #raise NotImplementedError("Need to implement for Assignment 3")
       (soft_input,mask) = ctx.saved_values
       return out_grad.f.attn_softmax_bw(out_grad, soft_input), mask.zeros(mask.shape)
       #   END ASSIGN3_1
@@ -447,15 +443,19 @@ class Attn_Softmax(Function):
 class LayerNorm(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, gamma: Tensor, beta: Tensor) -> Tensor:
+        
       #   BEGIN ASSIGN3_2 
-      #raise NotImplementedError("Need to implement for Assignment 3")
-      return inp.f.layernorm_fw(inp, gamma, beta)
+      ln_res, vars, means = inp.f.layernorm_fw(inp, gamma, beta)
+      ctx.save_for_backward(ln_res, inp, vars, means, gamma, beta)
+      return ln_res
       #   END ASSIGN3_2
 
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_2
-      raise NotImplementedError("Need to implement for Assignment 3")
+      (ln_res, inp, vars, means, gamma, beta) = ctx.saved_values
+      inp_grad, gamma_grad, betta_grad = ln_res.f.layernorm_bw(out_grad, inp, gamma, beta, vars, means)
+      return inp_grad, gamma_grad, betta_grad
       #   END ASSIGN3_2
 
 

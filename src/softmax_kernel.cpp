@@ -362,7 +362,8 @@ void launch_attn_softmax_bw(float *out_grad,
                                 cudaStream_t stream) {
   
   const int warps_per_block = 4;
-  dim3 grid_dim(rows / warps_per_block);
+  //dim3 grid_dim(rows / warps_per_block);d
+  dim3 grid_dim((rows + warps_per_block - 1) / warps_per_block);
   dim3 block_dim(WARP_SIZE, warps_per_block);
   // BEGIN ASSIGN3_1
   
