@@ -44,6 +44,7 @@ class MultiHeadAttention(Module):
         self.n_head    = n_head
         self.causal    = causal
         self.attn_hidden_dim = n_embd // n_head
+        self.use_fused_kernel = use_fused_kernel
 
         # COPY FROM ASSIGN2_4
         self.q_projection = Linear(self.n_embd, self.n_embd, bias, backend)
@@ -113,10 +114,12 @@ class MultiHeadAttention(Module):
             ### END YOUR SOLUTION
         else:
             # BEGIN ASSIGN3_3
-            M = self.create_causal_mask(queries_len)
-            if(not self.causal):
-                M = M.zeros(M.shape)
-            result = q.attn_softmax((q @ kT)/np.sqrt(self.attn_hidden_dim), M) @ v
+            dummy_M = tensor_from_numpy(np.zeros((batch_size, 1, 1, queries_len), dtype=datatype), backend=self.backend)
+            M = self.create_causal_mask(batch_size, num_head, queries_len)
+            if(self.causal):
+                result = ((q @ kT)/np.sqrt(self.attn_hidden_dim) + M).attn_softmax(dummy_M) @ v
+            else:
+                result = ((q @ kT)/np.sqrt(self.attn_hidden_dim)).attn_softmax(dummy_M) @ v
             # END ASSIGN3_3
 
         return result
@@ -215,7 +218,7 @@ class TransformerLayer(Module):
             self.ln_1 = LayerNorm1dFused(n_embd, ln_eps, backend)
             self.ln_2 = LayerNorm1dFused(n_embd, ln_eps, backend)
             # END ASSIGN3_3
-        self.attention = MultiHeadAttention(n_embd, n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend)
+        self.attention = MultiHeadAttention(n_embd, n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
         self.ff = FeedForward(n_embd, p_dropout=p_dropout, bias=bias, backend=backend)
 
     def forward(self, x):

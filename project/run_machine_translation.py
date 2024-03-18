@@ -19,6 +19,8 @@ from minitorch import DecoderLM
 from minitorch.cuda_kernel_ops import CudaKernelOps
 
 import os
+os.environ["http_proxy"] = "http://proxy.cmu.edu:3128"
+os.environ["https_proxy"] = "http://proxy.cmu.edu:3128"
 
 def get_dataset(dataset_name, model_max_length):
     """
