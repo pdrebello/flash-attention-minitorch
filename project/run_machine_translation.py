@@ -19,8 +19,6 @@ from minitorch import DecoderLM
 from minitorch.cuda_kernel_ops import CudaKernelOps
 
 import os
-os.environ["http_proxy"] = "http://proxy.cmu.edu:3128"
-os.environ["https_proxy"] = "http://proxy.cmu.edu:3128"
 
 def get_dataset(dataset_name, model_max_length):
     """
@@ -128,8 +126,6 @@ def collate_batch(
         token_ids_tgt = tokenizer(
             f'{example[tgt_key]}<eos_{tgt_key}>')['input_ids']
 
-        # TODO
-        
         token_ids = token_ids_src + token_ids_tgt 
         token_ids = token_ids[:model_max_length]
         token_ids += ([pad_token_id]*max(0, model_max_length - len(token_ids)))
@@ -175,7 +171,6 @@ def loss_fn(batch, model):
     batch_size, seq_len, vocab_size = logits.shape
     
     # COPY FROM ASSIGN2_5
-    # TODO
     # compute the MLE loss based on logits obtained by the model.
     # hint: using the function minitorch.nn.softmax_loss
     loss = minitorch.nn.softmax_loss(logits.view(batch_size*seq_len, vocab_size), batch['labels'].view(batch_size*seq_len)) 
@@ -191,8 +186,9 @@ def train(model, optimizer, examples, n_samples, collate_fn, batch_size, desc):
 
     for i in (prog_bar := tqdm.trange(
             0, len(examples), batch_size, desc=f'Training ({desc})')):
+        
         batch = collate_fn(examples=examples[i:i + batch_size])
-
+        
         t0 = time.time()
         optimizer.zero_grad()
         loss = loss_fn(batch=batch, model=model)
@@ -325,7 +321,7 @@ def parse_args():
 
 def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
          model_max_length=40,
-         n_epochs=10,
+         n_epochs=1,
          batch_size=128,
          learning_rate=0.02,
          samples_per_epoch=20000,
@@ -387,33 +383,6 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
             collate_fn=collate_fn,
             desc=desc)
 
-        validation_loss = evaluate_loss(
-            model=model,
-            examples=dataset['validation'],
-            batch_size=batch_size,
-            collate_fn=collate_fn,
-            desc=desc)
-
-        print(f'Epoch {epoch_idx}: Validation Loss = {validation_loss}')
-
-        gen_sents = generate(
-            model=model,
-            examples=dataset['test'],
-            src_key=src_key,
-            tgt_key=tgt_key,
-            tokenizer=tokenizer,
-            model_max_length=model_max_length,
-            backend=backend,
-            desc=desc)
-
-        gen_examples = []
-        for example, gen_sent in zip(dataset['test'], gen_sents):
-            gen_examples.append({'example': example, 'gen': gen_sent})
-
-        eval_scores = evaluate_bleu(
-            examples=dataset['test'], gen_sents=gen_sents, tgt_key=tgt_key)
-        print(f'Epoch {epoch_idx}: {eval_scores}')
-    return
 
 if __name__ == '__main__':
     fire.Fire(main)

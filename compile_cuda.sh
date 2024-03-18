@@ -1,7 +1,3 @@
-cp src/softmax_kernel.cpp src/softmax_kernel.cu
-cp src/layernorm_kernel.cpp src/layernorm_kernel.cu
-cp src/combine.cpp src/combine.cu
-
 mkdir -p minitorch/cuda_kernels
 nvcc -o minitorch/cuda_kernels/combine.so --shared src/combine.cu -Xcompiler -fPIC
 
