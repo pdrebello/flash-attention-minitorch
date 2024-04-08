@@ -37,6 +37,7 @@ from .tensor_functions import (
     Tanh,
     Attn_Softmax,
     LayerNorm,
+    Flash_Attn,
 )
 
 if TYPE_CHECKING:
@@ -416,6 +417,9 @@ class Tensor:
         """
         self.grad = None
 
+    def flash_attn(self, k: Tensor, v: Tensor) -> Tensor:
+        return Flash_Attn.apply(self, k, v)
+    
     def attn_softmax(self, mask: Tensor) -> Tensor:
       return Attn_Softmax.apply(self, mask)
 

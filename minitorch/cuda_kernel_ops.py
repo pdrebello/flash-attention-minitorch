@@ -27,6 +27,7 @@ import minitorch
 lib = ctypes.CDLL("minitorch/cuda_kernels/combine.so")
 lib_softmax = ctypes.CDLL("minitorch/cuda_kernels/softmax_kernel.so")
 lib_layernorm = ctypes.CDLL("minitorch/cuda_kernels/layernorm_kernel.so")
+lib_flash_attn_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_bw.so")
 datatype = np.float32
 
 # function map
@@ -517,3 +518,125 @@ class CudaKernelOps(TensorOps):
         return inp_grad, gamma_grad, betta_grad
       #   END ASSIGN3_2
       
+    @staticmethod
+    def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor):
+        """
+        assert(len(q.shape) == 4)
+        assert(q.shape == k.shape)
+        assert(k.shape == v.shape)
+    
+        out = a.zeros(a.shape)
+        out = out.view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
+        nshape = out._tensor._shape
+        nstrides = out._tensor._strides
+        q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
+        k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])
+        v = v.contiguous().view(np.prod(v.shape[:-2]), v.shape[-2], v.shape[-1])
+        assert(q._tensor._strides == out._tensor._strides)
+        assert(q._tensor._strides == k._tensor._strides)
+        assert(q._tensor._strides == v._tensor._strides)
+        """
+        import sys
+        sys.path.append("../tests/")
+        from flash_attn_python import flash_attention
+        batch_size, nhead, N, d = q.shape
+
+        q_torch, k_torch, v_torch = torch.tensor(q.to_numpy()), torch.tensor(k.to_numpy()), torch.tensor(v.to_numpy())
+        out_torch = torch.zeros(q_torch.shape, device=q_torch.device)
+        l_torch = torch.zeros((batch_size, nhead, N), device=q_torch.device)
+        m_torch = torch.zeros((batch_size, nhead, N), device=q_torch.device)
+        for batch_idx in range(batch_size):
+            for head_idx in range(nhead):
+                out_torch[batch_idx, head_idx, :, :],l_torch[batch_idx, head_idx, :],m_torch[batch_idx, head_idx, :] = flash_attention(q_torch[batch_idx, head_idx, :, :], \
+                                                     k_torch[batch_idx, head_idx, :, :], v_torch[batch_idx, head_idx, :, :])
+        #o, l, m = flash_attention(q, k, v)
+        return minitorch.tensor_from_numpy(np.array(out_torch)), minitorch.tensor_from_numpy(np.array(l_torch)), minitorch.tensor_from_numpy(np.array(m_torch))
+
+    @staticmethod
+    def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor):
+      #   BEGIN ASSIGN3_1
+      """
+      print("K")
+      print(k.to_numpy()[0,0])
+      print("V")
+      print(v.to_numpy()[0,0])
+      print("Q")
+      print(q.to_numpy()[0,0])
+      print("Out")
+      print(out.to_numpy()[0,0])
+      print("Out Grad")
+      print(out_grad.to_numpy()[0,0])
+      
+      print("l")
+      print(l.to_numpy())
+      print("m")
+      print(m.to_numpy())
+        """
+        
+      batch_size, nhead, from_len, to_len = q.shape
+      assert(q.shape == k.shape)
+      assert(q.shape == v.shape)
+      assert(q.shape == out.shape)
+      assert(q.shape == out_grad.shape)
+      assert(l.shape == (batch_size, nhead, from_len))
+      assert(m.shape == (batch_size, nhead, from_len))
+      assert((q._tensor._strides - k._tensor._strides).sum() ==0)
+      assert((q._tensor._strides - v._tensor._strides).sum() ==0)
+      assert((q._tensor._strides - out._tensor._strides).sum() ==0)
+      assert((q._tensor._strides - out_grad._tensor._strides).sum() ==0)
+      stream = torch.cuda.current_stream().cuda_stream
+
+      q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
+      k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])
+      v = v.contiguous().view(np.prod(v.shape[:-2]), v.shape[-2], v.shape[-1])
+      out = out.contiguous().view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
+      out_grad = out_grad.contiguous().view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
+
+      l = l.contiguous().view(np.prod(l.shape[:-2]), l.shape[-2], l.shape[-1])
+      m = m.contiguous().view(np.prod(m.shape[:-2]), m.shape[-2], m.shape[-1])
+      
+      q_grad = q.zeros(q.shape)
+      k_grad = k.zeros(k.shape)
+      v_grad = v.zeros(v.shape)
+        
+      lib_flash_attn_bw.launch_flash_attn_bw.argtypes = [
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # out
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # out_grad
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q_grad
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k_grad
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v_grad
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # l
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # m
+        ctypes.c_int, # batch_size
+        ctypes.c_int, # from_len
+        ctypes.c_int, # to_len
+        ctypes.c_void_p
+      ]
+      lib_flash_attn_bw.launch_flash_attn_bw.restype = None
+
+      lib_flash_attn_bw.launch_flash_attn_bw(
+        q._tensor._storage,
+        k._tensor._storage,
+        v._tensor._storage,
+        out._tensor._storage,
+        out_grad._tensor._storage,
+        q_grad._tensor._storage,
+        k_grad._tensor._storage,
+        v_grad._tensor._storage,
+        l._tensor._storage,
+        m._tensor._storage,
+        batch_size * nhead,
+        from_len,
+        to_len,
+        stream
+      ) 
+      q_grad = q_grad.view(batch_size, nhead, from_len, to_len) 
+      k_grad = k_grad.view(batch_size, nhead, from_len, to_len) 
+      v_grad = v_grad.view(batch_size, nhead, from_len, to_len) 
+      
+      return q_grad, k_grad, v_grad
+
+

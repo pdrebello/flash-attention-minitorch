@@ -459,6 +459,18 @@ class LayerNorm(Function):
       return inp_grad, gamma_grad, betta_grad
       #   END ASSIGN3_2
 
+class Flash_Attn(Function):
+    @staticmethod
+    def forward(ctx: Context, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+      o, l, m = q.f.flash_attn_fw(q, k, v)
+      ctx.save_for_backward(q, k, v, o, l, m)
+      return o
+
+    @staticmethod
+    def backward(ctx: Context, out_grad: Tensor) -> Tensor:
+      q, k, v, o, l, m = ctx.saved_values
+      #  q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor
+      return out_grad.f.flash_attn_bw(q, k, v, o, out_grad, l, m)
 
 # Helpers for Constructing tensors
 def zeros(shape: UserShape, backend: TensorBackend = SimpleBackend) -> Tensor:
