@@ -27,6 +27,7 @@ import minitorch
 lib = ctypes.CDLL("minitorch/cuda_kernels/combine.so")
 lib_softmax = ctypes.CDLL("minitorch/cuda_kernels/softmax_kernel.so")
 lib_layernorm = ctypes.CDLL("minitorch/cuda_kernels/layernorm_kernel.so")
+lib_flash_attn_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_fw.so")
 lib_flash_attn_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_bw.so")
 datatype = np.float32
 
@@ -520,37 +521,55 @@ class CudaKernelOps(TensorOps):
       
     @staticmethod
     def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor):
-        """
-        assert(len(q.shape) == 4)
-        assert(q.shape == k.shape)
-        assert(k.shape == v.shape)
-    
-        out = a.zeros(a.shape)
-        out = out.view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
-        nshape = out._tensor._shape
-        nstrides = out._tensor._strides
-        q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
-        k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])
-        v = v.contiguous().view(np.prod(v.shape[:-2]), v.shape[-2], v.shape[-1])
-        assert(q._tensor._strides == out._tensor._strides)
-        assert(q._tensor._strides == k._tensor._strides)
-        assert(q._tensor._strides == v._tensor._strides)
-        """
-        import sys
-        sys.path.append("../tests/")
-        from flash_attn_python import flash_attention
-        batch_size, nhead, N, d = q.shape
+      batch_size, nhead, from_len, to_len = q.shape
+      assert(q.shape == k.shape)
+      assert(q.shape == v.shape)
+      assert((q._tensor._strides - k._tensor._strides).sum() ==0)
+      assert((q._tensor._strides - v._tensor._strides).sum() ==0)
+      stream = torch.cuda.current_stream().cuda_stream
+        
+      out = q.zeros(q.shape)
+      l = k.zeros((batch_size, nhead, from_len))
+      m = v.zeros((batch_size, nhead, from_len))  -1000000
+        
+      q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
+      k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])
+      v = v.contiguous().view(np.prod(v.shape[:-2]), v.shape[-2], v.shape[-1])
+      out = out.contiguous().view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
+      l = l.contiguous().view(np.prod(l.shape[:-2]), l.shape[-2], l.shape[-1])
+      m = m.contiguous().view(np.prod(m.shape[:-2]), m.shape[-2], m.shape[-1])
+        
+      lib_flash_attn_fw.launch_flash_attn_fw.argtypes = [
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # out
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # l
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # m
+        ctypes.c_int, # batch_size
+        ctypes.c_int, # from_len
+        ctypes.c_int, # to_len
+        ctypes.c_void_p
+      ]
+      lib_flash_attn_fw.launch_flash_attn_fw.restype = None
 
-        q_torch, k_torch, v_torch = torch.tensor(q.to_numpy()), torch.tensor(k.to_numpy()), torch.tensor(v.to_numpy())
-        out_torch = torch.zeros(q_torch.shape, device=q_torch.device)
-        l_torch = torch.zeros((batch_size, nhead, N), device=q_torch.device)
-        m_torch = torch.zeros((batch_size, nhead, N), device=q_torch.device)
-        for batch_idx in range(batch_size):
-            for head_idx in range(nhead):
-                out_torch[batch_idx, head_idx, :, :],l_torch[batch_idx, head_idx, :],m_torch[batch_idx, head_idx, :] = flash_attention(q_torch[batch_idx, head_idx, :, :], \
-                                                     k_torch[batch_idx, head_idx, :, :], v_torch[batch_idx, head_idx, :, :])
-        #o, l, m = flash_attention(q, k, v)
-        return minitorch.tensor_from_numpy(np.array(out_torch)), minitorch.tensor_from_numpy(np.array(l_torch)), minitorch.tensor_from_numpy(np.array(m_torch))
+      lib_flash_attn_fw.launch_flash_attn_fw(
+        q._tensor._storage,
+        k._tensor._storage,
+        v._tensor._storage,
+        out._tensor._storage,
+        l._tensor._storage,
+        m._tensor._storage,
+        batch_size * nhead,
+        from_len,
+        to_len,
+        stream
+      ) 
+      out = out.view(batch_size, nhead, from_len, to_len) 
+      l = l.view(batch_size, nhead, from_len) 
+      m = m.view(batch_size, nhead, from_len) 
+      
+      return out, l, m
 
     @staticmethod
     def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor):

@@ -18,7 +18,7 @@ def test_launch_flash_attn_bw():
   batch_size, from_len = kt.bs_sl()
   _, to_len = kt.bs_sl(batch_size)
 
-  batch_size, nhead, from_len, to_len = 1, 1, 32, 2
+  batch_size, nhead, from_len, to_len = 64, 8, 64, 10
     
   print(
       "(batch_size, nhead, from_len, to_len): "

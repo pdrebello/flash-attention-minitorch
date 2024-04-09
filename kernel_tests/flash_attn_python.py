@@ -20,12 +20,15 @@ def flash_attention(Q, K, V):
     on_chip_memory_size = d * 256
     B_c = on_chip_memory_size // (4 * d)  # Using 4 bytes per float
     B_r = min(on_chip_memory_size // (4 * d), d)
+    B_c = 32
+    B_r = min(B_c, d)
 
     O = torch.zeros_like(Q, device=Q.device)
     l = torch.zeros(N, dtype=torch.float64, device=Q.device)
     m = -np.inf * torch.ones(N, dtype=torch.float64, device=Q.device)
     T_r = int(np.ceil(N / B_r))
     T_c = int(np.ceil(N / B_c))
+    #print(f"Bc: {B_c}, Br: {B_r}")
     for j in range(T_c):
         K_j = K[j * B_c:(j + 1) * B_c]
         V_j = V[j * B_c:(j + 1) * B_c]
@@ -36,15 +39,22 @@ def flash_attention(Q, K, V):
             m_i = m[i * B_r:(i + 1) * B_r]
     
             S_ij = tau * (Q_i @ K_j.T) 
+
             m_ij = torch.max(S_ij, dim=1).values
             P_ij = torch.exp(S_ij - m_ij[:, None]) 
-
+            
+            #print("Pij")
+            #print(P_ij)
             l_ij = torch.sum(P_ij, dim=1)
             m_new = torch.maximum(m_i, m_ij) 
 
+            
             l_new = torch.exp(m_i - m_new) * l_i + torch.exp(m_ij - m_new) * l_ij
 
+            
             O[i * B_r:(i + 1) * B_r] = (1.0/l_new)[:, None] * ((torch.exp(m_i - m_new) * l_i)[:, None] * O_i +  (torch.exp(m_ij - m_new)[:, None] * (P_ij @ V_j)))
+            
+            
             m[i * B_r:(i + 1) * B_r] = m_new
             
             l[i * B_r:(i + 1) * B_r] = l_new
