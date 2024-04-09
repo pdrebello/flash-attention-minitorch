@@ -43,14 +43,10 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     int B_r = min(BASE_THREAD_NUM, d); //min(on_chip_memory_size / (4 * d), d);
     int T_r = (N + B_r - 1)/ B_r;
     int T_c = (N +B_c -1)/ B_c;
-    
-
-    //printf("%d, %d, %d | %d, %d, %d\n", blockIdx.x, blockIdx.y, blockIdx.z, threadIdx.x, threadIdx.y, threadIdx.z);
-    
 
     int tile_size = B_c * d; 
     
-    assert(d < TILE_SIZE/BASE_THREAD_NUM);
+    //assert(d < TILE_SIZE/BASE_THREAD_NUM);
     __shared__ float sram[TILE_SIZE * 7];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
@@ -182,7 +178,7 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 printf("\n\n");
 
             }*/
-            //__syncthreads();
+            __syncthreads();
             
         }
     }

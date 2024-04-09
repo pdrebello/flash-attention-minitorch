@@ -14,15 +14,15 @@ from flash_attn_python import flash_attention , flash_attention_backward, comput
 
 @kt.case(atol=1e-2, rtol=1e-3, ntest=5)
 def test_launch_flash_attn_bw():
-  nhead = kt.nhead
-  batch_size, from_len = kt.bs_sl()
-  _, to_len = kt.bs_sl(batch_size)
+  #batch_size, from_len = kt.bs_sl()
+  #_, to_len = kt.bs_sl(batch_size)
+  #nhead = kt.nhead
 
-  batch_size, nhead, from_len, to_len = 64, 8, 64, 10
-    
+  #batch_size, nhead, from_len, to_len = 1, 1, 125, 13
+  
   print(
-      "(batch_size, nhead, from_len, to_len): "
-      f"({batch_size}, {nhead}, {from_len}, {to_len})"
+      "(batch_size, nhead, from_len, to_len),"
+      f": ({batch_size}, {nhead}, {from_len}, {to_len})"
   )
 
   out_grad = kt.ones((batch_size, nhead, from_len, to_len))
@@ -31,7 +31,7 @@ def test_launch_flash_attn_bw():
   v = kt.rand((batch_size, nhead, from_len, to_len))
 
   ### OUR SOLUTION ####
-  def custom():
+  def flash_attention_minitorch():
     q_mt = minitorch.tensor(q.clone().tolist(), backend=backend, requires_grad=True)
     k_mt = minitorch.tensor(k.clone().tolist(), backend=backend, requires_grad=True)
     v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
@@ -58,7 +58,7 @@ def test_launch_flash_attn_bw():
     ], end_time - start_time
 
   #### TORCH BACKPROP #####
-  def custom_torch():
+  def attention_torch():
     out = kt.zeros((batch_size, nhead, from_len, to_len))
     l = kt.zeros((batch_size, nhead, from_len))
     m = kt.zeros((batch_size, nhead, from_len))
@@ -90,7 +90,7 @@ def test_launch_flash_attn_bw():
     ], end_time - start_time
 
   #### PYTHON FLASH ATTENTION BACKWARD FROM NOTEBOOK ####
-  def old_baseline():
+  def flash_attention_torch():
     start_time = time.time()
       
     out = kt.zeros((batch_size, nhead, from_len, to_len))
@@ -117,7 +117,7 @@ def test_launch_flash_attn_bw():
     return [dq, dk,dv], end_time - start_time
 
   #### MINITORCH BACKWARD #####
-  def baseline():
+  def attention_minitorch():
     start_time = time.time()
     q_mt = minitorch.tensor(q.clone().tolist(), backend=backend, requires_grad=True)
     k_mt = minitorch.tensor(k.permute(0,1,3,2).clone().tolist(), backend=backend, requires_grad=True)
@@ -136,10 +136,15 @@ def test_launch_flash_attn_bw():
 
     
     return [dq, dk,dv], end_time - start_time
-  return custom, baseline #custom, baseline
+  return flash_attention_minitorch, attention_minitorch
 
 
 kt.init(device="cuda:0", nhead=8)
-kt.run(
-  'test_launch_flash_attn_bw'
-)
+for batch_size in [128]:
+    for nhead in [8]:
+        for from_len in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
+            for to_len  in [1, 2, 4, 8, 15]:
+                kt.run('test_launch_flash_attn_bw')
+#kt.run(
+#  'test_launch_flash_attn_bw'
+#)

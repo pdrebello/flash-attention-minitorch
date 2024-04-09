@@ -530,7 +530,8 @@ class CudaKernelOps(TensorOps):
         
       out = q.zeros(q.shape)
       l = k.zeros((batch_size, nhead, from_len))
-      m = v.zeros((batch_size, nhead, from_len))  -1000000
+      m = tensor_from_numpy(np.ones(l.shape) * (-np.finfo(datatype).max), backend=q.backend)
+      #m = v.zeros((batch_size, nhead, from_len)) -np.finfo(datatype).max 
         
       q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
       k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])

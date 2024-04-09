@@ -34,13 +34,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     l += batch_idx * N;
     m += batch_idx * N;
     
-    /*if(batch_idx == 1 && tidx == 0 && tidx_y == 0){
-        printf("Batch %d: %f, %f, %f\n", batch_idx, q[0], k[0], v[0]);
-        printf("Batch %d: %f, %f, %f, %f\n", batch_idx, out_grad[0], out[0], l[0], m[0]);
-        printf("Batch %d: %f, %f, %f\n", batch_idx, q_grad[0], k_grad[0], v_grad[0]);
-    }*/
-    //printf("%f\n", l[0]);
-    
     float tau = sqrt(1.0/d);
     int on_chip_memory_size = d * 256;
     int B_c = BASE_THREAD_NUM; //on_chip_memory_size / (4 * d);  // Using 4 bytes per float
@@ -48,10 +41,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     int T_r = (N + B_r - 1)/ B_r;
     int T_c = (N +B_c -1)/ B_c;
     
-
-    //printf("%d, %d, %d | %d, %d, %d\n", blockIdx.x, blockIdx.y, blockIdx.z, threadIdx.x, threadIdx.y, threadIdx.z);
-    
-
     int tile_size = B_c * d; 
     
     assert(d < TILE_SIZE/BASE_THREAD_NUM);
@@ -126,25 +115,20 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
             
             __syncthreads();
             for(int y = 0; y < d; y++){
-                //if(i * B_r + tidx < N && j * B_c + tidx_y < N){
-                if(tidx <B_r && tidx_y < B_c){
-                    float old = Sij[tidx * B_c + tidx_y] ;
+                if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){
+                //if(tidx <B_r && tidx_y < B_c){
                     Sij[tidx * B_c + tidx_y] += (tau * Qi[tidx * d + y] * Kj[tidx_y * d + y]);
-                    //if(tidx == 1 && tidx_y == 0)
-                    //printf("%d %d %d::: %f -> %f | %f, %f\n", tidx, tidx_y, y, old, Sij[tidx * B_c + tidx_y], Qi[tidx * d + y], Kj[tidx_y * d + y]);
                 }   
             }
             __syncthreads();
-            //if(i * B_r + tidx < N && j * B_c + tidx_y < N){  
-            if(tidx < B_r && tidx_y < B_c){  
+            if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){ 
+            //if(tidx < B_r && tidx_y < B_c){  
                 Pij[tidx * B_c + tidx_y] = (1.0/li[tidx]) * exp(Sij[tidx * B_c + tidx_y] - mi[tidx]);
             }  
             __syncthreads();
             for(int y = 0; y < max(B_r, d); y++){
                 if(tidx < B_c && tidx_y < d && y < B_r){
-                    float old = dVj[tidx * d + tidx_y];
                     dVj[tidx * d + tidx_y] += (Pij[y * B_c + tidx] * dOi[y * d + tidx_y]);
-                    //printf("%d, %d, %d: %f -> %f\n", tidx, tidx_y, y, old, dVj[tidx * d + tidx_y]);
                 }   
                 if(tidx < B_r && tidx_y < B_c && y < d){
                     dPij[tidx * B_c + tidx_y] += (dOi[tidx * d + y] * Vj[tidx_y * d + y]);
@@ -155,15 +139,14 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                 }   
             }
             __syncthreads();
-            if(tidx < B_r && tidx_y < B_c){
+            //if(tidx < B_r && tidx_y < B_c){
+            if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){ 
                 dSij[tidx * B_c + tidx_y] = Pij[tidx * B_c + tidx_y] * (dPij[tidx * B_c + tidx_y] - Di[tidx]);
             }  
             __syncthreads();
-            for(int y = 0; y < B_c; y++){
-                if(tidx < B_r && tidx_y < d){
-                    //float old = dQi[tidx * d + tidx_y];
+            if(tidx < B_r && tidx_y < d){
+                for(int y = 0; y < B_c && j * B_c + y < N; y++){
                     dQi[tidx * d + tidx_y] += (tau * dSij[tidx * B_c + y] * Kj[y * d + tidx_y]);
-                    //printf("A Writing: %d, %d ::: %f -> %f | %d, %d | %d, %d\n", i*B_r + tidx, y, old, dQi[tidx * d + y], tidx, B_c, tidx_y, y);
                 }   
             }
             __syncthreads();
@@ -174,28 +157,8 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                 if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0 && y < d){
                     float old = q_grad[i * d * B_r + tidx * d + y];
                     q_grad[i * d * B_r + tidx * d + y] = dQi[tidx * d + y];
-
-                    
                 }
             }
-            __syncthreads();
-        
-            /*
-            if(tidx == 0 && tidx_y == 0 && batch_idx == 1){
-
-                printf("\nSij cuda\n");
-                for(int x = 0;x<B_r;x++){
-                    for(int y = 0;y< B_c;y++){
-                        printf("%f ", Pij[x * d + y]);
-                    }
-                    printf("\n");
-                }
-                for(int x = 0;x<B_r;x++){
-                    printf("%f ", li[x]);
-                }
-                printf("\n\n");
-
-            }*/
             __syncthreads();
         }
         for(int y = 0; y < d; y++){
@@ -207,18 +170,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
         __syncthreads();
 
     }
-    /* 
-    const int nhead = gridDim.z;
-    const int token_per_reduce = 1;
-    typedef cub::BlockLoad<T, block_dim, ele_per_thread,
-                         cub::BLOCK_LOAD_VECTORIZE>
-      BlockLoad;
-    __shared__ typename BlockLoad::TempStorage ts_load;
-    typedef cub::BlockStore<T, block_dim, ele_per_thread,
-                          cub::BLOCK_STORE_VECTORIZE>
-      BlockStore;
-    __shared__ typename BlockStore::TempStorage ts_store;
-    */
 }
 
 
