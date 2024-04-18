@@ -47,16 +47,13 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     int tile_size = B_c * d; 
     
     assert(d < TILE_SIZE/BASE_THREAD_NUM);
-    __shared__ float sram[TILE_SIZE * 7];
+    __shared__ float sram[TILE_SIZE * 5];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
     float* Vj = &sram[TILE_SIZE * 2];
-    float* Oi = &sram[TILE_SIZE * 3];
-    float* Sij  = &sram[TILE_SIZE * 4];
-    //float* Pij  = &sram[TILE_SIZE * 5];
-    float* tempPRO  = &sram[TILE_SIZE * 6];
+    float* Sij  = &sram[TILE_SIZE * 3];
+    float* tempPRO  = &sram[TILE_SIZE * 4];
 
-    
     __shared__ float lm_sram[BASE_THREAD_NUM * 6];
     float* li = lm_sram;
     float* mi = &lm_sram[BASE_THREAD_NUM];
@@ -84,7 +81,6 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             for(int y = 0; y < d; y++){
                 if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0){
                     //assert(tidx * B_c + y < B_r);
-                    Oi[tidx * d + y]  = out[(i * B_r + tidx) * d + y];
                     Qi[tidx * d + y]  = q[(i * B_r + tidx) * d + y];
                     tempPRO[tidx * d + y] = 0;
                     if(y==0){
@@ -96,16 +92,13 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                     
                 }
                 else if(tidx_y == 0){
-                    Oi[tidx * d + y]  = 0;
                     Qi[tidx * d + y]  = 0;
-                    tempPRO[tidx * d + y] = 0;
-                    
+                    tempPRO[tidx * d + y] = 0; 
                 }
             }
             
             Sij[tidx * B_c + tidx_y] = 0;
-            //Pij[tidx * B_c + tidx_y] = 0;
-            
+
             __syncthreads();
             for(int y = 0; y < d; y++){
                 if(tidx <B_r && (i * B_r + tidx < N) && tidx_y < B_c && (j * B_c + tidx_y < N)){
@@ -115,13 +108,10 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             __syncthreads();
             for(int y = 0; y < B_c; y++){
                 if(tidx < B_r && (i * B_r + tidx < N) && tidx_y == 0){
-                    //float old = mij[tidx];
                     mij[tidx] = max(mij[tidx], Sij[tidx * B_c + y]);
-                    //printf("%d %d : %f -> %f\n", tidx, y, old, mij[tidx]);
                 }  
             }
             __syncthreads();
-            //if(tidx < B_r && tidx_y < B_c){  
             if(tidx <B_r && (i * B_r + tidx < N) && tidx_y < B_c && (j * B_c + tidx_y < N)){
                 Sij[tidx * B_c + tidx_y] = exp(Sij[tidx * B_c + tidx_y] - mij[tidx]);
             } 
@@ -144,15 +134,11 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }   
             }
             __syncthreads();
-            if(tidx < B_r && tidx_y < d){
-                Oi[tidx * d + tidx_y] = li[tidx] * exp(mi[tidx] - mnew[tidx]) * Oi[tidx * d + tidx_y] + exp(mij[tidx] - mnew[tidx]) * tempPRO[tidx * d + tidx_y];
-                Oi[tidx * d + tidx_y] = (1.0/lnew[tidx]) * Oi[tidx * d + tidx_y];
-                
-            }   
-            __syncthreads();
+
             for(int y = 0; y < d; y++){
                 if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0){
-                    out[(i * B_r + tidx) * d + y] = Oi[tidx * d + y];
+                    out[(i * B_r + tidx) * d + y] = (1.0/lnew[tidx]) * (li[tidx] * exp(mi[tidx] - mnew[tidx]) * out[(i * B_r + tidx) * d + y] + exp(mij[tidx] - mnew[tidx]) * tempPRO[tidx * d + y]);
+                    
                     if(y==0){
                         l[i * B_r + tidx] = lnew[tidx];
                         m[i * B_r + tidx] = mnew[tidx]; 
