@@ -8,7 +8,8 @@
 
 #include <cooperative_groups.h>
 #define BASE_THREAD_NUM 32
-#define TILE_SIZE 1024
+#define TILE_SIZE 2050
+#define MBY4D 8
 
 namespace cg = cooperative_groups;
 const float EPSILON = 1e-8f;
@@ -38,15 +39,14 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     //printf("%f\n", l[0]);
     
     float tau = sqrt(1.0/d);
-    int on_chip_memory_size = d * 256;
-    int B_c = BASE_THREAD_NUM; //on_chip_memory_size / (4 * d);  // Using 4 bytes per float
-    int B_r = min(BASE_THREAD_NUM, d); //min(on_chip_memory_size / (4 * d), d);
+    
+    int B_c = MBY4D; //BASE_THREAD_NUM; //on_chip_memory_size / (4 * d);  // Using 4 bytes per float
+    int B_r = min(B_c, d); //min(on_chip_memory_size / (4 * d), d);
     int T_r = (N + B_r - 1)/ B_r;
     int T_c = (N +B_c -1)/ B_c;
 
-    int tile_size = B_c * d; 
-    
-    assert(d < TILE_SIZE/BASE_THREAD_NUM);
+    assert(TILE_SIZE > MBY4D * d);
+    //assert(d < TILE_SIZE/BASE_THREAD_NUM);
     __shared__ float sram[TILE_SIZE * 5];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
@@ -54,121 +54,165 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     float* Sij  = &sram[TILE_SIZE * 3];
     float* tempPRO  = &sram[TILE_SIZE * 4];
 
-    __shared__ float lm_sram[BASE_THREAD_NUM * 6];
+    __shared__ float lm_sram[MBY4D * 6];
     float* li = lm_sram;
-    float* mi = &lm_sram[BASE_THREAD_NUM];
-    float* lij = &lm_sram[BASE_THREAD_NUM * 2];
-    float* mij = &lm_sram[BASE_THREAD_NUM * 3];
-    float* lnew = &lm_sram[BASE_THREAD_NUM * 4];
-    float* mnew = &lm_sram[BASE_THREAD_NUM * 5];
+    float* mi = &lm_sram[MBY4D];
+    float* lij = &lm_sram[MBY4D * 2];
+    float* mij = &lm_sram[MBY4D * 3];
+    float* lnew = &lm_sram[MBY4D * 4];
+    float* mnew = &lm_sram[MBY4D * 5];
     
 
+    int B_c_blocks = (B_c + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
+    int B_r_blocks = (B_r + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
+    int d_blocks = (d + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
 
     for(int j = 0; j < T_c; j++){
         // Loading
-        for(int y = 0; y < d; y++){
-            if(tidx < B_c && j * B_c + tidx < N && tidx_y == 0){
-                Kj[tidx * d + y] = k[(j * B_c + tidx) * d + y];
-                Vj[tidx * d + y] = v[(j * B_c + tidx) * d + y];
-            }
-            else if(tidx_y == 0){
-                Kj[tidx * d + y] = 0;
-                Vj[tidx * d + y] = 0;
+        for(int read_block = 0;read_block < B_c_blocks; read_block++){
+            //printf("%d\n", read_block);
+            int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+            
+            for(int y = 0; y < d; y++){
+                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y == 0){
+                    Kj[tidx_ * d + y] = k[(j * B_c + tidx_) * d + y];
+                    Vj[tidx_ * d + y] = v[(j * B_c + tidx_) * d + y];
+                }
+                else if(tidx_ < B_c && tidx_y == 0){
+                    Kj[tidx_ * d + y] = 0;
+                    Vj[tidx_ * d + y] = 0;
+                }
             }
         }
+        __syncthreads();
+        
         for(int i = 0; i < T_r; i++){
             // Loading 
-            for(int y = 0; y < d; y++){
-                if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0){
-                    //assert(tidx * B_c + y < B_r);
-                    Qi[tidx * d + y]  = q[(i * B_r + tidx) * d + y];
-                    tempPRO[tidx * d + y] = 0;
-                    if(y==0){
-                        li[tidx] = l[i * B_r + tidx];
-                        lij[tidx] = 0;
-                        mi[tidx] = m[i * B_r + tidx];
-                        mij[tidx] = -10000000;
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                for(int y = 0; y < d; y++){
+                    if(tidx_ < B_r && i * B_r + tidx_ < N && tidx_y == 0){
+                        Qi[tidx_ * d + y]  = q[(i * B_r + tidx_) * d + y];
+                        tempPRO[tidx_ * d + y] = 0;
+                        if(y==0){
+                            li[tidx_] = l[i * B_r + tidx_];
+                            lij[tidx_] = 0;
+                            mi[tidx_] = m[i * B_r + tidx_];
+                            mij[tidx_] = -10000000;
+                        }  
+
                     }
-                    
-                }
-                else if(tidx_y == 0){
-                    Qi[tidx * d + y]  = 0;
-                    tempPRO[tidx * d + y] = 0; 
+                    else if(tidx_ < B_r && tidx_y == 0){
+                        Qi[tidx_ * d + y]  = 0;
+                        tempPRO[tidx_ * d + y] = 0; 
+
+                    }
+                }  
+            }
+
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                for(int read_block_y=0; read_block_y < B_c_blocks; read_block_y++){
+                    int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                    int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                    if(tidx_ <B_r &&  tidx_y_ < B_c ){
+                        Sij[tidx_ * B_c + tidx_y_] = 0;
+                    }   
+
                 }
             }
             
-            Sij[tidx * B_c + tidx_y] = 0;
 
             __syncthreads();
-            for(int y = 0; y < d; y++){
-                if(tidx <B_r && (i * B_r + tidx < N) && tidx_y < B_c && (j * B_c + tidx_y < N)){
-                    Sij[tidx * B_c + tidx_y] += (tau * Qi[tidx * d + y] * Kj[tidx_y * d + y]);
-                }   
-            }
-            __syncthreads();
-            for(int y = 0; y < B_c; y++){
-                if(tidx < B_r && (i * B_r + tidx < N) && tidx_y == 0){
-                    mij[tidx] = max(mij[tidx], Sij[tidx * B_c + y]);
-                }  
-            }
-            __syncthreads();
-            if(tidx <B_r && (i * B_r + tidx < N) && tidx_y < B_c && (j * B_c + tidx_y < N)){
-                Sij[tidx * B_c + tidx_y] = exp(Sij[tidx * B_c + tidx_y] - mij[tidx]);
-            } 
-            __syncthreads();
-            for(int y = 0; y < B_c; y++){
-                if(tidx < B_r && (i * B_r + tidx < N) && tidx_y == 0){
-                    lij[tidx] += Sij[tidx * B_c + y];
-                }  
-            }
-            __syncthreads();
-            if(tidx < B_r && (i * B_r + tidx < N) && tidx_y == 0){
-                mnew[tidx] = max(mi[tidx], mij[tidx]);
-                lnew[tidx] = li[tidx] * exp(mi[tidx] - mnew[tidx]) + lij[tidx] * exp(mij[tidx] - mnew[tidx]);
-            }  
-            __syncthreads();
-
-            for(int y = 0; y < B_c; y++){
-                if(tidx < B_r && (i * B_r + tidx < N) && tidx_y < d){
-                    tempPRO[tidx * d + tidx_y] += (Sij[tidx * B_c + y] * Vj[y * d + tidx_y]);
-                }   
-            }
-            __syncthreads();
-
-            for(int y = 0; y < d; y++){
-                if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0){
-                    out[(i * B_r + tidx) * d + y] = (1.0/lnew[tidx]) * (li[tidx] * exp(mi[tidx] - mnew[tidx]) * out[(i * B_r + tidx) * d + y] + exp(mij[tidx] - mnew[tidx]) * tempPRO[tidx * d + y]);
+            
+            
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                for(int read_block_y=0; read_block_y < B_c_blocks; read_block_y++){
+                    int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                    int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
-                    if(y==0){
-                        l[i * B_r + tidx] = lnew[tidx];
-                        m[i * B_r + tidx] = mnew[tidx]; 
+                    for(int y = 0; y < d; y++){
+                        if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
+                            Sij[tidx_ * B_c + tidx_y_] += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
+                        }   
                     }
                 }
             }
             __syncthreads();
-            /*
-            if(tidx == 0 && tidx_y == 0 && batch_idx == 0){
 
-                printf("\Pij cuda\n");
-                for(int x = 0;x<B_r;x++){
-                    for(int y = 0;y< B_c;y++){
-                        printf("%f ", Pij[x * B_c + y]);
-                    }
-                    printf("\n");
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                for(int y = 0; y < B_c; y++){
+                    if(tidx_ < B_r && (i * B_r + tidx_ < N) && tidx_y == 0 && (j * B_c + y < N)){
+                        mij[tidx_] = max(mij[tidx_], Sij[tidx_ * B_c + y]);
+                    }  
                 }
+            }
+            __syncthreads();
+
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                for(int read_block_y=0; read_block_y < B_c_blocks; read_block_y++){
+                    int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                    int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                    
+                    if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
+                        Sij[tidx_ * B_c + tidx_y_] = exp(Sij[tidx_ * B_c + tidx_y_] - mij[tidx_]);
+                    } 
+                }
+            }
+            __syncthreads();
+            
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                //lij[tidx_] = 0;
+                for(int y = 0; y < B_c; y++){
+                    if(tidx_ < B_r && (i * B_r + tidx_ < N) && tidx_y == 0 && (j * B_c + y < N)){
+                        lij[tidx_] += Sij[tidx_ * B_c + y];
+                    }  
+                }
+            }
+            __syncthreads();
+
+            
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                if(tidx_ < B_r && (i * B_r + tidx_ < N) && tidx_y == 0){
+                    mnew[tidx_] = max(mi[tidx_], mij[tidx_]);
+                    lnew[tidx_] = li[tidx_] * exp(mi[tidx_] - mnew[tidx_]) + lij[tidx_] * exp(mij[tidx_] - mnew[tidx_]);
+                }  
+            }
+            __syncthreads();
+
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
+                for(int read_block_y=0; read_block_y < d_blocks; read_block_y++){
+                    int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                    int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                    for(int y = 0; y < B_c; y++){
+                        if(tidx_ < B_r && (i * B_r + tidx_ < N) && tidx_y_ < d){
+                            tempPRO[tidx_ * d + tidx_y_] += (Sij[tidx_ * B_c + y] * Vj[y * d + tidx_y_]);
+                        }   
+                    }
+                }
+            }
+            __syncthreads();
+    
+            for(int read_block=0; read_block < B_r_blocks; read_block++){
                 
-                printf("lnew cuda\n");
-                for(int x = 0;x<B_r;x++){
-                    printf("%f ", mij[x]);
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                for(int y = 0; y < d; y++){
+                    if(tidx_ < B_r && i * B_r + tidx_ < N && tidx_y == 0){
+                        
+                        out[(i * B_r + tidx_) * d + y] = (1.0/lnew[tidx_]) * (li[tidx_] * exp(mi[tidx_] - mnew[tidx_]) * out[(i * B_r + tidx_) * d + y] + exp(mij[tidx_] - mnew[tidx_]) * tempPRO[tidx_ * d + y]);
+                        if(y==0){
+                            l[i * B_r + tidx_] = lnew[tidx_];
+                            m[i * B_r + tidx_] = mnew[tidx_]; 
+                        }
+                    }
                 }
-                printf("\n\n");
-
-            }*/
+            }
             __syncthreads();
-            
+          
         }
     }
-
 }
 
 
@@ -227,6 +271,7 @@ void launch_flash_attn_fw(
     // Check CUDA execution
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
+        gpuErrchk(err);
       fprintf(stderr, "Flash Attention Error: %s\n", cudaGetErrorString(err));
       exit(EXIT_FAILURE);
     }
