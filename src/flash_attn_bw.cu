@@ -7,8 +7,8 @@
 #include "includes/kernels.h"
 
 #include <cooperative_groups.h>
-#define BASE_THREAD_NUM 16
-#define TILE_SIZE 256
+#define BASE_THREAD_NUM 32
+#define TILE_SIZE 1024
 
 namespace cg = cooperative_groups;
 const float EPSILON = 1e-8f;
@@ -35,16 +35,16 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     m += batch_idx * N;
     
     float tau = sqrt(1.0/d);
-    int on_chip_memory_size = d * 256;
+    //int on_chip_memory_size = d * 256;
     int B_c = BASE_THREAD_NUM; //on_chip_memory_size / (4 * d);  // Using 4 bytes per float
     int B_r = min(BASE_THREAD_NUM, d); //min(on_chip_memory_size / (4 * d), d);
     int T_r = (N + B_r - 1)/ B_r;
     int T_c = (N +B_c -1)/ B_c;
     
-    int tile_size = B_c * d; 
+    //int tile_size = B_c * d; 
     
     assert(d < TILE_SIZE/BASE_THREAD_NUM);
-    __shared__ float sram[TILE_SIZE * 12];
+    __shared__ float sram[TILE_SIZE * 11];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
     float* Vj = &sram[TILE_SIZE * 2];
@@ -53,16 +53,16 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     float* dQi = &sram[TILE_SIZE * 4];
     float* dKj = &sram[TILE_SIZE * 5];
     float* dVj = &sram[TILE_SIZE * 6];
-    float* Pij  = &sram[TILE_SIZE * 7];
-    float* dPij  = &sram[TILE_SIZE * 8];
-    float* Oi = &sram[TILE_SIZE * 9];
-    float* dOi  = &sram[TILE_SIZE * 10];
-    float* dSij  = &sram[TILE_SIZE * 11];
+    //float* Pij  = &sram[TILE_SIZE * 7];
+    float* dPij  = &sram[TILE_SIZE * 7];
+    float* Oi = &sram[TILE_SIZE * 8];
+    float* dOi  = &sram[TILE_SIZE * 9];
+    float* dSij  = &sram[TILE_SIZE * 10];
     
-    __shared__ float lm_sram[TILE_SIZE * 3];
+    __shared__ float lm_sram[BASE_THREAD_NUM * 3];
     float* li = lm_sram;
-    float* mi = &lm_sram[TILE_SIZE];
-    float* Di = &lm_sram[TILE_SIZE * 2];
+    float* mi = &lm_sram[BASE_THREAD_NUM];
+    float* Di = &lm_sram[BASE_THREAD_NUM * 2];
     
 
 
@@ -109,13 +109,13 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
             
             Sij[tidx * B_c + tidx_y] = 0;
             dSij[tidx * B_c + tidx_y] = 0;
-            Pij[tidx * B_c + tidx_y] = 0;
+            //Pij[tidx * B_c + tidx_y] = 0;
             dPij[tidx * B_c + tidx_y] = 0;
             
             
             __syncthreads();
-            for(int y = 0; y < d; y++){
-                if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){
+            if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){
+                for(int y = 0; y < d; y++){
                 //if(tidx <B_r && tidx_y < B_c){
                     Sij[tidx * B_c + tidx_y] += (tau * Qi[tidx * d + y] * Kj[tidx_y * d + y]);
                 }   
@@ -123,12 +123,12 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
             __syncthreads();
             if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){ 
             //if(tidx < B_r && tidx_y < B_c){  
-                Pij[tidx * B_c + tidx_y] = (1.0/li[tidx]) * exp(Sij[tidx * B_c + tidx_y] - mi[tidx]);
+                Sij[tidx * B_c + tidx_y] = (1.0/li[tidx]) * exp(Sij[tidx * B_c + tidx_y] - mi[tidx]);
             }  
             __syncthreads();
             for(int y = 0; y < max(B_r, d); y++){
                 if(tidx < B_c && tidx_y < d && y < B_r){
-                    dVj[tidx * d + tidx_y] += (Pij[y * B_c + tidx] * dOi[y * d + tidx_y]);
+                    dVj[tidx * d + tidx_y] += (Sij[y * B_c + tidx] * dOi[y * d + tidx_y]);
                 }   
                 if(tidx < B_r && tidx_y < B_c && y < d){
                     dPij[tidx * B_c + tidx_y] += (dOi[tidx * d + y] * Vj[tidx_y * d + y]);
@@ -141,7 +141,7 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
             __syncthreads();
             //if(tidx < B_r && tidx_y < B_c){
             if(tidx <B_r && i * B_r + tidx < N && tidx_y < B_c && j * B_c + tidx_y < N){ 
-                dSij[tidx * B_c + tidx_y] = Pij[tidx * B_c + tidx_y] * (dPij[tidx * B_c + tidx_y] - Di[tidx]);
+                dSij[tidx * B_c + tidx_y] = Sij[tidx * B_c + tidx_y] * (dPij[tidx * B_c + tidx_y] - Di[tidx]);
             }  
             __syncthreads();
             if(tidx < B_r && tidx_y < d){
@@ -150,19 +150,22 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                 }   
             }
             __syncthreads();
-            for(int y = 0; y < max(B_r, d); y++){
-                if(tidx < B_c && tidx_y < d && y < B_r){
-                    dKj[tidx * d + tidx_y] += (tau * dSij[y * B_c + tidx] * Qi[y * d + tidx_y]);    
-                }   
-                if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0 && y < d){
-                    float old = q_grad[i * d * B_r + tidx * d + y];
+            
+            if(tidx < B_c && tidx_y < d){
+                for(int y = 0; y < B_r ; y++){  // max(B_r, d)
+                    dKj[tidx * d + tidx_y] += (tau * dSij[y * B_c + tidx] * Qi[y * d + tidx_y]); 
+                }
+            }   
+            if(tidx < B_r && i * B_r + tidx < N && tidx_y == 0){
+                for(int y = 0; y < d; y++){
                     q_grad[i * d * B_r + tidx * d + y] = dQi[tidx * d + y];
                 }
             }
+            
             __syncthreads();
         }
-        for(int y = 0; y < d; y++){
-            if(tidx < B_c && j * B_c + tidx < N && tidx_y == 0){
+        if(tidx < B_c && j * B_c + tidx < N && tidx_y == 0){
+            for(int y = 0; y < d; y++){
                 k_grad[j * d * B_c + tidx * d + y] = dKj[tidx * d + y];
                 v_grad[j * d * B_c + tidx * d + y] = dVj[tidx * d + y];
             }

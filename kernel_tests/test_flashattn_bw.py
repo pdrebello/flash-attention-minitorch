@@ -139,12 +139,25 @@ def test_launch_flash_attn_bw():
   return flash_attention_minitorch, attention_minitorch
 
 
-kt.init(device="cuda:0", nhead=8)
+kt.init(device="cuda:6", nhead=8)
+for batch_size in [3]:
+    for nhead in [3]:
+        for from_len in [200]:
+            for to_len  in [31]:
+                kt.run('test_launch_flash_attn_bw')
+"""
 for batch_size in [128]:
     for nhead in [8]:
         for from_len in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
             for to_len  in [1, 2, 4, 8, 15]:
                 kt.run('test_launch_flash_attn_bw')
+
+for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
+    for nhead in [1]:
+        for from_len in [40]:
+            for to_len  in [15]:
+                kt.run('test_launch_flash_attn_bw')
+"""
 #kt.run(
 #  'test_launch_flash_attn_bw'
 #)

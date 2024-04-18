@@ -7,8 +7,8 @@
 #include "includes/kernels.h"
 
 #include <cooperative_groups.h>
-#define BASE_THREAD_NUM 16
-#define TILE_SIZE 256
+#define BASE_THREAD_NUM 32
+#define TILE_SIZE 1024
 
 namespace cg = cooperative_groups;
 const float EPSILON = 1e-8f;
@@ -46,24 +46,24 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
 
     int tile_size = B_c * d; 
     
-    //assert(d < TILE_SIZE/BASE_THREAD_NUM);
+    assert(d < TILE_SIZE/BASE_THREAD_NUM);
     __shared__ float sram[TILE_SIZE * 7];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
     float* Vj = &sram[TILE_SIZE * 2];
     float* Oi = &sram[TILE_SIZE * 3];
     float* Sij  = &sram[TILE_SIZE * 4];
-    float* Pij  = &sram[TILE_SIZE * 5];
+    //float* Pij  = &sram[TILE_SIZE * 5];
     float* tempPRO  = &sram[TILE_SIZE * 6];
 
     
-    __shared__ float lm_sram[TILE_SIZE * 6];
+    __shared__ float lm_sram[BASE_THREAD_NUM * 6];
     float* li = lm_sram;
-    float* mi = &lm_sram[TILE_SIZE];
-    float* lij = &lm_sram[TILE_SIZE * 2];
-    float* mij = &lm_sram[TILE_SIZE * 3];
-    float* lnew = &lm_sram[TILE_SIZE * 4];
-    float* mnew = &lm_sram[TILE_SIZE * 5];
+    float* mi = &lm_sram[BASE_THREAD_NUM];
+    float* lij = &lm_sram[BASE_THREAD_NUM * 2];
+    float* mij = &lm_sram[BASE_THREAD_NUM * 3];
+    float* lnew = &lm_sram[BASE_THREAD_NUM * 4];
+    float* mnew = &lm_sram[BASE_THREAD_NUM * 5];
     
 
 
@@ -104,7 +104,7 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             }
             
             Sij[tidx * B_c + tidx_y] = 0;
-            Pij[tidx * B_c + tidx_y] = 0;
+            //Pij[tidx * B_c + tidx_y] = 0;
             
             __syncthreads();
             for(int y = 0; y < d; y++){
@@ -123,12 +123,12 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             __syncthreads();
             //if(tidx < B_r && tidx_y < B_c){  
             if(tidx <B_r && (i * B_r + tidx < N) && tidx_y < B_c && (j * B_c + tidx_y < N)){
-                Pij[tidx * B_c + tidx_y] = exp(Sij[tidx * B_c + tidx_y] - mij[tidx]);
+                Sij[tidx * B_c + tidx_y] = exp(Sij[tidx * B_c + tidx_y] - mij[tidx]);
             } 
             __syncthreads();
             for(int y = 0; y < B_c; y++){
                 if(tidx < B_r && (i * B_r + tidx < N) && tidx_y == 0){
-                    lij[tidx] += Pij[tidx * B_c + y];
+                    lij[tidx] += Sij[tidx * B_c + y];
                 }  
             }
             __syncthreads();
@@ -140,7 +140,7 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
 
             for(int y = 0; y < B_c; y++){
                 if(tidx < B_r && (i * B_r + tidx < N) && tidx_y < d){
-                    tempPRO[tidx * d + tidx_y] += (Pij[tidx * B_c + y] * Vj[y * d + tidx_y]);
+                    tempPRO[tidx * d + tidx_y] += (Sij[tidx * B_c + y] * Vj[y * d + tidx_y]);
                 }   
             }
             __syncthreads();

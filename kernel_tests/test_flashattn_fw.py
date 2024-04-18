@@ -98,14 +98,24 @@ kt.init(device="cuda:0", nhead=8)
 #  'test_launch_flash_attn_fw'
 #)
 
-for batch_size in [128]:
-    for nhead in [8]:
-        for from_len in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
-            for to_len  in [1, 2, 4, 8, 15]:
+#for batch_size in [128]:
+#    for nhead in [8]:
+#        for from_len in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
+#            for to_len  in [1, 2, 4, 8, 15]:
+#                kt.run('test_launch_flash_attn_fw')
+
+#for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
+#    for nhead in [1]:
+#        for from_len in [40]:
+#            for to_len  in [15]:
+#                kt.run('test_launch_flash_attn_fw')
+for batch_size in [3]:
+    for nhead in [3]:
+        for from_len in [2, 400]:
+            for to_len  in [31]:
                 kt.run('test_launch_flash_attn_fw')
 
-
-#batch_size, nhead, from_len, to_len = 511, 7, 489, 13
+#batch_size, nhead, from_len, to_len = 2, 2, 489, 13
 #kt.run('test_launch_flash_attn_fw')
 """
 for batch_size in [1, 31, 127, 511]:
