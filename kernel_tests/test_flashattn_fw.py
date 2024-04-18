@@ -70,9 +70,12 @@ def test_launch_flash_attn_fw():
     k_mt = minitorch.tensor(k.permute(0,1,3,2).clone().tolist(), backend=backend, requires_grad=True)
     v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
     
+      
     #k_mt = k_mt.view(0, 1, 3, 2)
     start_time = time.time()
-    res = minitorch.nn.softmax(((q_mt @ k_mt)/np.sqrt(to_len)) , dim=3) @ v_mt
+    drop = minitorch.tensor_from_numpy(np.ones((from_len, from_len),dtype=float), backend=backend)
+    mask = minitorch.tensor_from_numpy(np.zeros((from_len, from_len),dtype=float), backend=backend)
+    res = (drop * minitorch.nn.softmax(((q_mt @ k_mt)/np.sqrt(to_len)) + mask , dim=3)) @ v_mt
     end_time = time.time()
 
     res = torch.tensor(res._tensor._storage).float().cuda()
@@ -90,10 +93,10 @@ def test_launch_flash_attn_fw():
     return [
         cust_out,
     ], end_time - start_time
-  return flash_attention_minitorch, attention_minitorch
+  return flash_attention_minitorch, attention_minitorch #flash_attention_minitorch,  attention_minitorch #flash_attention_torch #
 
 
-kt.init(device="cuda:0", nhead=8)
+kt.init(device="cuda:7", nhead=8)
 #kt.run(
 #  'test_launch_flash_attn_fw'
 #)
@@ -109,10 +112,11 @@ kt.init(device="cuda:0", nhead=8)
 #        for from_len in [40]:
 #            for to_len  in [15]:
 #                kt.run('test_launch_flash_attn_fw')
-for batch_size in [3]:
-    for nhead in [3]:
-        for from_len in [2, 400]:
-            for to_len  in [31]:
+for batch_size in [1]:
+    for nhead in [1]:
+        for from_len in [64]:
+            for to_len  in [128]:
+                #assert(to_len * 4 <= 1024)
                 kt.run('test_launch_flash_attn_fw')
 
 #batch_size, nhead, from_len, to_len = 2, 2, 489, 13
