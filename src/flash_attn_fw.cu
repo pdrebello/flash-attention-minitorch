@@ -5,11 +5,13 @@
 #include <cmath>
 #include "includes/block_reduce.h"
 #include "includes/kernels.h"
+#include <sys/time.h>
+
 
 #include <cooperative_groups.h>
 #define BASE_THREAD_NUM 32
 #define TILE_SIZE 2050
-#define MBY4D 8
+#define MBY4D 16
 
 namespace cg = cooperative_groups;
 const float EPSILON = 1e-8f;
@@ -66,11 +68,12 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     int B_c_blocks = (B_c + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
     int B_r_blocks = (B_r + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
     int d_blocks = (d + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
-
+#ifdef TIME
+    clock_t start_time, end_time;
+#endif    
     for(int j = 0; j < T_c; j++){
         // Loading
         for(int read_block = 0;read_block < B_c_blocks; read_block++){
-            //printf("%d\n", read_block);
             int tidx_ = read_block * BASE_THREAD_NUM + tidx;
             
             for(int y = 0; y < d; y++){
@@ -88,26 +91,34 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
         
         for(int i = 0; i < T_r; i++){
             // Loading 
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0)
+                 start_time  = clock();
+#endif
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-                for(int y = 0; y < d; y++){
-                    if(tidx_ < B_r && i * B_r + tidx_ < N && tidx_y == 0){
-                        Qi[tidx_ * d + y]  = q[(i * B_r + tidx_) * d + y];
-                        tempPRO[tidx_ * d + y] = 0;
-                        if(y==0){
-                            li[tidx_] = l[i * B_r + tidx_];
-                            lij[tidx_] = 0;
-                            mi[tidx_] = m[i * B_r + tidx_];
-                            mij[tidx_] = -10000000;
-                        }  
-
+                if(tidx_ < B_r){
+                    if(i * B_r + tidx_ < N){
+                        li[tidx_] = l[i * B_r + tidx_];
+                        lij[tidx_] = 0;
+                        mi[tidx_] = m[i * B_r + tidx_];
+                        mij[tidx_] = -10000000;
                     }
-                    else if(tidx_ < B_r && tidx_y == 0){
-                        Qi[tidx_ * d + y]  = 0;
-                        tempPRO[tidx_ * d + y] = 0; 
+                    for(int read_block_y=0; read_block_y < d_blocks; read_block_y++){                   
+                        int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
 
+                        if(tidx_y_ < d){ 
+                            if(i * B_r + tidx_ < N){
+                                Qi[tidx_ * d + tidx_y_]  = q[(i * B_r + tidx_) * d + tidx_y_];
+                                tempPRO[tidx_ * d + tidx_y_] = 0;
+                            }
+                            else{
+                                Qi[tidx_ * d + tidx_y_]  = 0;
+                                tempPRO[tidx_ * d + tidx_y_] = 0; 
+                            }
+                        }
                     }
-                }  
+                }
             }
 
             for(int read_block=0; read_block < B_r_blocks; read_block++){
@@ -123,21 +134,36 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             
 
             __syncthreads();
-            
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: init\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
             
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 for(int read_block_y=0; read_block_y < B_c_blocks; read_block_y++){
                     int tidx_ = read_block * BASE_THREAD_NUM + tidx;
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
-                    for(int y = 0; y < d; y++){
-                        if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
-                            Sij[tidx_ * B_c + tidx_y_] += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
-                        }   
+                    
+                    if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
+                        float S_acc = 0;
+                        for(int y = 0; y < d; y++)
+                            S_acc += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
+                        Sij[tidx_ * B_c + tidx_y_]  = S_acc; 
                     }
                 }
             }
             __syncthreads();
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: S\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
 
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
@@ -148,6 +174,13 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }
             }
             __syncthreads();
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: Mij\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
 
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 for(int read_block_y=0; read_block_y < B_c_blocks; read_block_y++){
@@ -160,10 +193,16 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }
             }
             __syncthreads();
-            
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: Pij\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
+
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-                //lij[tidx_] = 0;
                 for(int y = 0; y < B_c; y++){
                     if(tidx_ < B_r && (i * B_r + tidx_ < N) && tidx_y == 0 && (j * B_c + y < N)){
                         lij[tidx_] += Sij[tidx_ * B_c + y];
@@ -171,7 +210,13 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }
             }
             __syncthreads();
-
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: lij\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
             
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
@@ -181,7 +226,13 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }  
             }
             __syncthreads();
-
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: mnew\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 for(int read_block_y=0; read_block_y < d_blocks; read_block_y++){
                     int tidx_ = read_block * BASE_THREAD_NUM + tidx;
@@ -194,23 +245,39 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                 }
             }
             __syncthreads();
-    
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: temp\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
             for(int read_block=0; read_block < B_r_blocks; read_block++){
-                
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-                for(int y = 0; y < d; y++){
-                    if(tidx_ < B_r && i * B_r + tidx_ < N && tidx_y == 0){
-                        
-                        out[(i * B_r + tidx_) * d + y] = (1.0/lnew[tidx_]) * (li[tidx_] * exp(mi[tidx_] - mnew[tidx_]) * out[(i * B_r + tidx_) * d + y] + exp(mij[tidx_] - mnew[tidx_]) * tempPRO[tidx_ * d + y]);
-                        if(y==0){
-                            l[i * B_r + tidx_] = lnew[tidx_];
-                            m[i * B_r + tidx_] = mnew[tidx_]; 
-                        }
+                if(tidx_ < B_r && i * B_r + tidx_ < N){
+                    float aaa = li[tidx_];
+                    float baa = mi[tidx_];
+                    float caa = mnew[tidx_];
+                    float daa = mij[tidx_];
+                    float eaa = lnew[tidx_];
+                    l[i * B_r + tidx_] = lnew[tidx_];
+                    m[i * B_r + tidx_] = mnew[tidx_]; 
+                    
+                    for(int read_block_y=0; read_block_y < d_blocks; read_block_y++){                   
+                        int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                        if(tidx_y_ < d)
+                            out[(i * B_r + tidx_) * d + tidx_y_] = (aaa * exp(baa - caa) * out[(i * B_r + tidx_) * d + tidx_y_] +  exp(daa - caa) * tempPRO[tidx_ * d + tidx_y_])/eaa;
                     }
                 }
             }
             __syncthreads();
-          
+#ifdef TIME
+            if(tidx==0 and tidx_y == 0){
+                end_time  = clock();
+                printf("%f: Output\n", 1000000.0*(end_time - start_time));
+                start_time = clock();
+            }
+#endif
         }
     }
 }
