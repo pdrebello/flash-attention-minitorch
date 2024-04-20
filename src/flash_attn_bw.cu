@@ -44,7 +44,7 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     assert(TILE_SIZE > MBY4D * d);
     
     
-    __shared__ float sram[TILE_SIZE * 8];
+    __shared__ float sram[TILE_SIZE * 7];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
     float* Vj = &sram[TILE_SIZE * 2];
@@ -53,7 +53,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     float* dPij  = &sram[TILE_SIZE * 4];
     float* Oi = &sram[TILE_SIZE * 5];
     float* dOi  = &sram[TILE_SIZE * 6];
-    float* dSij  = &sram[TILE_SIZE * 7];
     
     __shared__ float lm_sram[MBY4D * 3];
     float* li = lm_sram;
@@ -129,7 +128,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     if(tidx_ <B_r &&  tidx_y_ < B_c ){
                         Sij[tidx_ * B_c + tidx_y_] = 0;
-                        dSij[tidx_ * B_c + tidx_y_] = 0;
                         dPij[tidx_ * B_c + tidx_y_] = 0;
                     }   
                 }
@@ -159,6 +157,7 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     } 
                 }
             }
+            //Sij is now Pij
             __syncthreads();
 
 
@@ -197,10 +196,11 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_ = read_block * BASE_THREAD_NUM + tidx;
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
-                        dSij[tidx_ * B_c + tidx_y_] = Sij[tidx_ * B_c + tidx_y_] * (dPij[tidx_ * B_c + tidx_y_] - Di[tidx_]);
+                        Sij[tidx_ * B_c + tidx_y_] = Sij[tidx_ * B_c + tidx_y_] * (dPij[tidx_ * B_c + tidx_y_] - Di[tidx_]);
                     }
                 }
             }
+            //Sij is contains dSij
             __syncthreads();
 
             for(int read_block=0; read_block < B_r_blocks; read_block++){
@@ -211,7 +211,7 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < d){
                         float S_acc =  threadSpecific_dQi[read_block_y]; 
                         for(int y = 0; y < B_c; y++){
-                            S_acc += (tau * dSij[tidx_ * B_c + y] * Kj[y * d + tidx_y_]); 
+                            S_acc += (tau * Sij[tidx_ * B_c + y] * Kj[y * d + tidx_y_]); 
                         }
                         q_grad[i * d * B_r + tidx_ * d + tidx_y_] = S_acc;
                     }
@@ -225,7 +225,7 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     if(tidx_ <B_c && (j * B_c + tidx_ < N) && tidx_y_ < d){
                         float S_acc = threadSpecific_dKj[read_block_y]; //dKj[tidx_ * d + tidx_y_];
                         for(int y = 0; y < B_r; y++){
-                            S_acc += (tau * dSij[y * B_c + tidx_] * Qi[y * d + tidx_y_]); 
+                            S_acc += (tau * Sij[y * B_c + tidx_] * Qi[y * d + tidx_y_]); 
                         }
                         threadSpecific_dKj[read_block_y] = S_acc;
                     }

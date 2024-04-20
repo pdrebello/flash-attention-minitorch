@@ -124,7 +124,9 @@ def test_launch_flash_attn_bw():
     v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
     out_grad_mt = minitorch.tensor(out_grad.clone().tolist(), backend=backend, requires_grad=True)
 
-    result = minitorch.softmax(((q_mt @ k_mt)/np.sqrt(to_len)) , dim=3) @ v_mt
+    drop = minitorch.tensor_from_numpy(np.ones((from_len, from_len),dtype=float), backend=backend)
+    mask = minitorch.tensor_from_numpy(np.zeros((from_len, from_len),dtype=float), backend=backend)
+    result = (minitorch.softmax(((q_mt @ k_mt)/np.sqrt(to_len) + mask) , dim=3) * drop) @ v_mt
 
     start_time = time.time()
     result = result.sum()
@@ -142,8 +144,8 @@ def test_launch_flash_attn_bw():
 kt.init(device="cuda:0", nhead=8)
 for batch_size in [8]:
     for nhead in [8]:
-        for from_len in [67]:
-            for to_len  in [65]:
+        for from_len in [2, 67]:
+            for to_len  in [3, 65]:
                 kt.run('test_launch_flash_attn_bw')
 """
 for batch_size in [128]:
