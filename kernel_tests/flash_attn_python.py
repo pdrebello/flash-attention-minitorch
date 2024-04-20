@@ -63,7 +63,7 @@ def flash_attention_backward(Q, K, V, O_flash, dO, l, m):
     on_chip_memory_size = d * 256
     B_c = on_chip_memory_size // (4 * d)  # Using 4 bytes per float
     B_r = min(on_chip_memory_size // (4 * d), d)
-    B_c = 32
+    B_c = 4
     B_r = min(B_c, d)
     
     dQ = torch.zeros_like(Q, device=Q.device)
@@ -77,6 +77,7 @@ def flash_attention_backward(Q, K, V, O_flash, dO, l, m):
         V_j = V[j * B_c:(j + 1) * B_c]
         dK_j = dK[j * B_c:(j + 1) * B_c]
         dV_j = dV[j * B_c:(j + 1) * B_c]
+        
         for i in range(T_r):
             Q_i = Q[i * B_r:(i + 1) * B_r]
             O_i = O_flash[i * B_r:(i + 1) * B_r]
@@ -86,6 +87,7 @@ def flash_attention_backward(Q, K, V, O_flash, dO, l, m):
             m_i = m[i * B_r:(i + 1) * B_r]
             
             S_ij = tau * (Q_i @ K_j.T) 
+            
             #print("S_ij")
             #print(S_ij)
             #if(i == 0):
@@ -97,12 +99,17 @@ def flash_attention_backward(Q, K, V, O_flash, dO, l, m):
             
             
             dV_j = dV_j + (P_ij.T @ dO_i)
+            
+            
             dP_ij = dO_i @ V_j.T
+            
             
     
             D_i = (dO_i * O_i).sum(dim=1)
+            
  
             dS_ij = P_ij * (dP_ij - D_i[:, None])
+            
             #dQ_i = dQ_i + (tau * dS_ij @ K_j)
             
             #print("dS_ij")
@@ -110,10 +117,12 @@ def flash_attention_backward(Q, K, V, O_flash, dO, l, m):
             #print("K_j")
             #print(K_j)
             dQ[i * B_r:(i + 1) * B_r] = dQ_i + (tau * dS_ij @ K_j)
+            
             #print("dQi")
             #print(dQ[i * B_r:(i + 1) * B_r])
             #print("dK_j")
             dK_j = dK_j + tau * dS_ij.T @ Q_i
+            #print(dK_j)
             #print(dK_j)
             
         dK[j * B_c:(j + 1) * B_c] = dK_j
