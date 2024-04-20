@@ -8,7 +8,7 @@
 
 #include <cooperative_groups.h>
 #define BASE_THREAD_NUM 32
-#define TILE_SIZE 512
+#define TILE_SIZE 1024
 #define MBY4D 4
 
 namespace cg = cooperative_groups;
@@ -23,7 +23,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     int tidx = threadIdx.x;
     int tidx_y = threadIdx.y;
     
-    //printf("Batch Idx : %d\n", batch_idx);
     q += batch_idx * N * d;
     k +=  batch_idx * N * d;
     v += batch_idx * N * d;
@@ -45,18 +44,16 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     assert(TILE_SIZE > MBY4D * d);
     
     
-    __shared__ float sram[TILE_SIZE * 10];
+    __shared__ float sram[TILE_SIZE * 8];
     float* Qi = sram;
     float* Kj = &sram[TILE_SIZE];
     float* Vj = &sram[TILE_SIZE * 2];
     float* Sij  = &sram[TILE_SIZE * 3];
 
-    float* dKj = &sram[TILE_SIZE * 4];
-    float* dVj = &sram[TILE_SIZE * 5];
-    float* dPij  = &sram[TILE_SIZE * 6];
-    float* Oi = &sram[TILE_SIZE * 7];
-    float* dOi  = &sram[TILE_SIZE * 8];
-    float* dSij  = &sram[TILE_SIZE * 9];
+    float* dPij  = &sram[TILE_SIZE * 4];
+    float* Oi = &sram[TILE_SIZE * 5];
+    float* dOi  = &sram[TILE_SIZE * 6];
+    float* dSij  = &sram[TILE_SIZE * 7];
     
     __shared__ float lm_sram[MBY4D * 3];
     float* li = lm_sram;
@@ -68,24 +65,27 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
     int B_r_blocks = (B_r + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
     int d_blocks = (d + BASE_THREAD_NUM - 1)/ BASE_THREAD_NUM;
     float threadSpecific_dQi[(TILE_SIZE /MBY4D + BASE_THREAD_NUM - 1)/BASE_THREAD_NUM];
+    float threadSpecific_dKj[(TILE_SIZE /MBY4D + BASE_THREAD_NUM - 1)/BASE_THREAD_NUM];
+    float threadSpecific_dVj[(TILE_SIZE /MBY4D + BASE_THREAD_NUM - 1)/BASE_THREAD_NUM];
     
     for(int j = 0; j < T_c; j++){
         // Loading
         for(int read_block = 0;read_block < B_c_blocks; read_block++){
-            int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-            
-            for(int y = 0; y < d; y++){
-                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y == 0){
-                    Kj[tidx_ * d + y] = k[(j * B_c + tidx_) * d + y];
-                    Vj[tidx_ * d + y] = v[(j * B_c + tidx_) * d + y];
-                    dKj[tidx_ * d + y] = 0;
-                    dVj[tidx_ * d + y] = 0;
+            for(int read_block_y = 0; read_block_y < d_blocks; read_block_y++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                
+                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y_ < d){
+                    Kj[tidx_ * d + tidx_y_] = k[(j * B_c + tidx_) * d + tidx_y_];
+                    Vj[tidx_ * d + tidx_y_] = v[(j * B_c + tidx_) * d + tidx_y_];
+                    threadSpecific_dKj[read_block_y] = 0;
+                    threadSpecific_dVj[read_block_y] = 0;
                 }
                 else if(tidx_ < B_c && tidx_y == 0){
-                    Kj[tidx_ * d + y] = 0;
-                    Vj[tidx_ * d + y] = 0;
-                    dKj[tidx_ * d + y] = 0;
-                    dVj[tidx_ * d + y] = 0;
+                    Kj[tidx_ * d + tidx_y_] = 0;
+                    Vj[tidx_ * d + tidx_y_] = 0;
+                    threadSpecific_dKj[read_block_y] = 0;
+                    threadSpecific_dVj[read_block_y] = 0;
                 }
             }
         }
@@ -168,10 +168,10 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
                     if(tidx_ <B_c && (j * B_c + tidx_ < N) && tidx_y_ < d){
-                        float S_acc = dVj[tidx_ * d + tidx_y_];
+                        float S_acc = threadSpecific_dVj[read_block_y];
                         for(int y = 0; y < B_r; y++)
-                            S_acc += (Sij[y * B_c + tidx_] * dOi[y * d + tidx_y_]);  //(tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
-                        dVj[tidx_ * d + tidx_y_] = S_acc; 
+                            S_acc += (Sij[y * B_c + tidx_] * dOi[y * d + tidx_y_]);  
+                        threadSpecific_dVj[read_block_y] = S_acc;
                     }
                 }
             }
@@ -209,7 +209,6 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
                     if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < d){
-
                         float S_acc =  threadSpecific_dQi[read_block_y]; 
                         for(int y = 0; y < B_c; y++){
                             S_acc += (tau * dSij[tidx_ * B_c + y] * Kj[y * d + tidx_y_]); 
@@ -224,11 +223,11 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
                     if(tidx_ <B_c && (j * B_c + tidx_ < N) && tidx_y_ < d){
-                        float S_acc = dKj[tidx_ * d + tidx_y_];
+                        float S_acc = threadSpecific_dKj[read_block_y]; //dKj[tidx_ * d + tidx_y_];
                         for(int y = 0; y < B_r; y++){
                             S_acc += (tau * dSij[y * B_c + tidx_] * Qi[y * d + tidx_y_]); 
                         }
-                        dKj[tidx_ * d + tidx_y_] = S_acc;
+                        threadSpecific_dKj[read_block_y] = S_acc;
                     }
                 }
             }
@@ -236,11 +235,13 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
         }
 
         for(int read_block = 0;read_block < B_c_blocks; read_block++){
-            int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-            for(int y = 0; y < d; y++){
-                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y == 0){
-                    k_grad[j * d * B_c + tidx_ * d + y] = dKj[tidx_ * d + y];
-                    v_grad[j * d * B_c + tidx_ * d + y] = dVj[tidx_ * d + y];
+            for(int read_block_y = 0; read_block_y < d_blocks; read_block_y++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+
+                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y_ < d){
+                    k_grad[(j * B_c + tidx_) * d + tidx_y_] = threadSpecific_dKj[read_block_y];
+                    v_grad[(j * B_c + tidx_) * d + tidx_y_] = threadSpecific_dVj[read_block_y]; 
                 }
             }
         }
