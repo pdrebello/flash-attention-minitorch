@@ -18,7 +18,7 @@ namespace lightseq {
 namespace cuda {
 
 template <typename T> //, int block_dim, int ele_per_thread>
-__global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, T* k_grad, T* v_grad, T *l, T *m, int batch, int N, int d) {
+__global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, T* k_grad, T* v_grad, T *l, T *m, int batch, int N, int d, bool causal_mask=false) {
     int batch_idx = blockIdx.x;
     int tidx = threadIdx.x;
     int tidx_y = threadIdx.y;
@@ -139,10 +139,15 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
                     int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
                     
                     if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
-                        float S_acc = 0;
-                        for(int y = 0; y < d; y++)
-                            S_acc += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
-                        Sij[tidx_ * B_c + tidx_y_]  = S_acc; 
+                        if(!causal_mask || j * B_c + tidx_y_ <= i * B_r + tidx_){
+                            float S_acc = 0;
+                            for(int y = 0; y < d; y++)
+                                S_acc += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
+                            Sij[tidx_ * B_c + tidx_y_]  = S_acc; 
+                        }
+                        else
+                            Sij[tidx_ * B_c + tidx_y_]  = -10000000;
+                            
                     }
                 }
             }
@@ -276,6 +281,7 @@ void launch_flash_attn_bw(
     float* l,
     float* m,
     int batch, int N, int d,
+    bool causal_mask,
     cudaStream_t stream
 ) {
     
@@ -312,7 +318,7 @@ void launch_flash_attn_bw(
     dim3 grid_dim(batch);  // batch_size x num_heads
     dim3 block_dim(BASE_THREAD_NUM, BASE_THREAD_NUM);
 
-    flash_attn_bw<float><<<grid_dim, block_dim, 0, stream>>>(d_q, d_k, d_v, d_out, d_out_grad, d_q_grad, d_k_grad, d_v_grad, d_l, d_m, batch, N, d);
+    flash_attn_bw<float><<<grid_dim, block_dim, 0, stream>>>(d_q, d_k, d_v, d_out, d_out_grad, d_q_grad, d_k_grad, d_v_grad, d_l, d_m, batch, N, d, causal_mask);
       //      d_out_grad, d_soft_inp, softmax_len);
     /*
     //int threadsPerBlock = BASE_THREAD_NUM;

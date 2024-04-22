@@ -20,11 +20,12 @@ namespace lightseq {
 namespace cuda {
 
 template <typename T> //, int block_dim, int ele_per_thread>
-__global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, int N, int d) {
+__global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, int N, int d, bool causal_mask=false) {
+    
     int batch_idx = blockIdx.x;
     int tidx = threadIdx.x;
     int tidx_y = threadIdx.y;
-    
+
     //printf("Batch Idx : %d\n", batch_idx);
     q += batch_idx * N * d;
     k +=  batch_idx * N * d;
@@ -149,10 +150,15 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
                     
                     
                     if(tidx_ <B_r && (i * B_r + tidx_ < N) && tidx_y_ < B_c && (j * B_c + tidx_y_ < N)){
-                        float S_acc = 0;
-                        for(int y = 0; y < d; y++)
-                            S_acc += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
-                        Sij[tidx_ * B_c + tidx_y_]  = S_acc; 
+
+                        if(!causal_mask || j * B_c + tidx_y_ <= i * B_r + tidx_){
+                            float S_acc = 0;
+                            for(int y = 0; y < d; y++)
+                                S_acc += (tau * Qi[tidx_ * d + y] * Kj[tidx_y_ * d + y]);
+                            Sij[tidx_ * B_c + tidx_y_]  = S_acc; 
+                        }
+                        else
+                            Sij[tidx_ * B_c + tidx_y_]  = -10000000;
                     }
                 }
             }
@@ -303,6 +309,7 @@ void launch_flash_attn_fw(
     float* l,
     float* m,
     int batch, int N, int d,
+    bool causal_mask,
     cudaStream_t stream
 ) {
     
@@ -327,7 +334,7 @@ void launch_flash_attn_fw(
     dim3 grid_dim(batch);  // batch_size x num_heads
     dim3 block_dim(BASE_THREAD_NUM, BASE_THREAD_NUM);
 
-    flash_attn_fw<float><<<grid_dim, block_dim, 0, stream>>>(d_q, d_k, d_v, d_out, d_l, d_m, batch, N, d);
+    flash_attn_fw<float><<<grid_dim, block_dim, 0, stream>>>(d_q, d_k, d_v, d_out, d_l, d_m, batch, N, d, causal_mask);
 
     cudaMemcpy(out, d_out, batch * N * d * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(l, d_l, batch * N * sizeof(float), cudaMemcpyDeviceToHost);

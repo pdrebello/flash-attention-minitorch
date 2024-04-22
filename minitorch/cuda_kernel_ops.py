@@ -520,7 +520,8 @@ class CudaKernelOps(TensorOps):
       #   END ASSIGN3_2
       
     @staticmethod
-    def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor):
+    def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor):   
+      causal_mask = int(causal_mask._tensor._storage.item()) == 1
       batch_size, nhead, from_len, to_len = q.shape
       assert(q.shape == k.shape)
       assert(q.shape == v.shape)
@@ -550,6 +551,7 @@ class CudaKernelOps(TensorOps):
         ctypes.c_int, # batch_size
         ctypes.c_int, # from_len
         ctypes.c_int, # to_len
+        ctypes.c_bool, # to_len
         ctypes.c_void_p
       ]
       lib_flash_attn_fw.launch_flash_attn_fw.restype = None
@@ -564,6 +566,7 @@ class CudaKernelOps(TensorOps):
         batch_size * nhead,
         from_len,
         to_len,
+        causal_mask,
         stream
       ) 
       out = out.view(batch_size, nhead, from_len, to_len) 
@@ -573,8 +576,10 @@ class CudaKernelOps(TensorOps):
       return out, l, m
 
     @staticmethod
-    def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor):
+    def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor):
       #   BEGIN ASSIGN3_1
+      
+      causal_mask_ = int(causal_mask._tensor._storage.item()) == 1
       """
       print("K")
       print(k.to_numpy()[0,0])
@@ -633,6 +638,7 @@ class CudaKernelOps(TensorOps):
         ctypes.c_int, # batch_size
         ctypes.c_int, # from_len
         ctypes.c_int, # to_len
+        ctypes.c_bool, # causal_mask
         ctypes.c_void_p
       ]
       lib_flash_attn_bw.launch_flash_attn_bw.restype = None
@@ -651,12 +657,13 @@ class CudaKernelOps(TensorOps):
         batch_size * nhead,
         from_len,
         to_len,
+        causal_mask_,
         stream
       ) 
       q_grad = q_grad.view(batch_size, nhead, from_len, to_len) 
       k_grad = k_grad.view(batch_size, nhead, from_len, to_len) 
       v_grad = v_grad.view(batch_size, nhead, from_len, to_len) 
       
-      return q_grad, k_grad, v_grad
+      return q_grad, k_grad, v_grad, causal_mask
 
 
