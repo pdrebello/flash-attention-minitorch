@@ -155,10 +155,10 @@ if(__name__ == '__main__'):
     args = parser.parse_args()
     
     kt.init(device="cuda:0", nhead=8)
-    for batch_size in [8]:
-        for nhead in [8]:
-            for from_len in [256]:
-                for to_len  in [256]:
+    for batch_size in [1]:
+        for nhead in [1]:
+            for from_len in [512, 1024]:
+                for to_len  in [34, 79]:
                     print(batch_size)
                     kt.run('test_launch_flash_attn_bw')
     """

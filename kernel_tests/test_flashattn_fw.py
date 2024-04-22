@@ -133,7 +133,7 @@ if(__name__ == '__main__'):
             #for from_len in [3, 40, 90]:
             #    for to_len  in [3, 17, 256]:
             for from_len in [327]:
-                for to_len  in [127]:
+                for to_len  in [34]:
                     #assert(to_len * 4 <= 1024)
                     kt.run('test_launch_flash_attn_fw')
     

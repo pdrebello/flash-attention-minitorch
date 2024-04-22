@@ -91,6 +91,11 @@ __global__ void flash_attn_bw(T *q, T *k, T *v, T *out, T *out_grad, T* q_grad, 
 
         for(int i = 0; i < T_r; i++){
             // Loading 
+#ifdef CAUSAL_BLOCKSPARSE
+            if(causal_mask && (j * B_c > (i+1) * B_r -1)){
+                continue;
+            }
+#endif
             for(int read_block=0; read_block < B_r_blocks; read_block++){
                 int tidx_ = read_block * BASE_THREAD_NUM + tidx;
                 

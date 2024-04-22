@@ -92,6 +92,11 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
         
         for(int i = 0; i < T_r; i++){
             // Loading 
+#ifdef CAUSAL_BLOCKSPARSE
+            if(causal_mask && (j * B_c > (i+1) * B_r -1)){
+                continue;
+            }
+#endif
 #ifdef TIME
             if(tidx==0 and tidx_y == 0)
                  start_time  = clock();
