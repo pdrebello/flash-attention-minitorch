@@ -8,7 +8,7 @@
 
 #include <cooperative_groups.h>
 #define BASE_THREAD_NUM 32
-#define TILE_SIZE 1024
+#define TILE_SIZE 1536
 #define MBY4D 4
 
 namespace cg = cooperative_groups;

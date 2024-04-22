@@ -577,27 +577,8 @@ class CudaKernelOps(TensorOps):
 
     @staticmethod
     def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor):
-      #   BEGIN ASSIGN3_1
-      
-      causal_mask_ = int(causal_mask._tensor._storage.item()) == 1
-      """
-      print("K")
-      print(k.to_numpy()[0,0])
-      print("V")
-      print(v.to_numpy()[0,0])
-      print("Q")
-      print(q.to_numpy()[0,0])
-      print("Out")
-      print(out.to_numpy()[0,0])
-      print("Out Grad")
-      print(out_grad.to_numpy()[0,0])
-      
-      print("l")
-      print(l.to_numpy())
-      print("m")
-      print(m.to_numpy())
-        """
-        
+      #   BEGIN ASSIGN3_1     
+      causal_mask_ = int(causal_mask._tensor._storage.item()) == 1        
       batch_size, nhead, from_len, to_len = q.shape
       assert(q.shape == k.shape)
       assert(q.shape == v.shape)
