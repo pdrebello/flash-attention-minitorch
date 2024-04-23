@@ -11,7 +11,7 @@ import minitorch
 from minitorch.cuda_kernel_ops import CudaKernelOps
 backend = minitorch.TensorBackend(CudaKernelOps)
 
-from flash_attn_python import flash_attention 
+from flash_attn_python import flash_attention, flash_attention2
 
 datatype = np.float32
 
@@ -103,6 +103,20 @@ def test_launch_flash_attn_fw():
     return [
         cust_out,
     ], end_time - start_time
+
+  def flash_attention2_torch():
+    cust_out = torch.zeros_like(q)
+    start_time = time.time()
+
+    for batch_idx in range(batch_size):
+        for head in range(nhead):
+            cust_out[batch_idx, head, :, :],_,_ = flash_attention2(q[batch_idx, head, :, :].cpu(), k[batch_idx, head, :, :].cpu(), v[batch_idx, head, :, :].cpu())
+    end_time = time.time()
+
+    return [
+        cust_out,
+    ], end_time - start_time
+      
   return flash_attention_minitorch, attention_minitorch #flash_attention_torch #
 
 
@@ -128,12 +142,12 @@ if(__name__ == '__main__'):
     #        for from_len in [40]:
     #            for to_len  in [15]:
     #                kt.run('test_launch_flash_attn_fw')
-    for batch_size in [8]:
-        for nhead in [8]:
+    for batch_size in [1]:
+        for nhead in [1]:
             #for from_len in [3, 40, 90]:
             #    for to_len  in [3, 17, 256]:
-            for from_len in [327]:
-                for to_len  in [34]:
+            for from_len in [89]: #, 3, 8, 35, 1024]:
+                for to_len  in [24]:
                     #assert(to_len * 4 <= 1024)
                     kt.run('test_launch_flash_attn_fw')
     

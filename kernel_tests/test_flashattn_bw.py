@@ -11,7 +11,7 @@ import minitorch
 from minitorch.cuda_kernel_ops import CudaKernelOps
 backend = minitorch.TensorBackend(CudaKernelOps)
 
-from flash_attn_python import flash_attention , flash_attention_backward, compute_attention
+from flash_attn_python import flash_attention , flash_attention_backward, flash_attention2 , flash_attention2_backward, compute_attention
 from test_flashattn_fw import create_causal_mask
 
 datatype = np.float32
@@ -120,6 +120,35 @@ def test_launch_flash_attn_bw():
       #kt.norm_res_list(
     return [dq, dk,dv], end_time - start_time
 
+
+  #### PYTHON FLASH ATTENTION BACKWARD FROM NOTEBOOK ####
+  def flash_attention2_torch():
+    start_time = time.time()
+      
+    out = kt.zeros((batch_size, nhead, from_len, to_len))
+    L = kt.zeros((batch_size, nhead, from_len))
+    
+
+    dq = kt.rand((batch_size, nhead, from_len, to_len))
+    dk = kt.rand((batch_size, nhead, from_len, to_len))
+    dv = kt.rand((batch_size, nhead, from_len, to_len))
+    start_time = time.time()
+
+    for batch_idx in range(batch_size):
+        for head_idx in range(nhead):
+            out[batch_idx, head_idx, :, :],L[batch_idx, head_idx, :] = flash_attention2(q[batch_idx, head_idx, :, :], \
+                                                     k[batch_idx, head_idx, :, :], v[batch_idx, head_idx, :, :])
+
+    for batch_idx in range(batch_size):
+        for head_idx in range(nhead):
+            dq[batch_idx, head_idx, :, :], dk[batch_idx, head_idx, :, :], dv[batch_idx, head_idx, :, :] = flash_attention2_backward(q[batch_idx, head_idx, :, :],\
+                                                  k[batch_idx, head_idx, :, :], v[batch_idx, head_idx, :, :], \
+                                                  out[batch_idx, head_idx, :, :], out_grad[batch_idx, head_idx, :, :],
+                                                  L[batch_idx, head_idx, :])
+    end_time = time.time()
+      #kt.norm_res_list(
+    return [dq, dk,dv], end_time - start_time
+      
   #### MINITORCH BACKWARD #####
   def attention_minitorch():
     start_time = time.time()
@@ -157,9 +186,8 @@ if(__name__ == '__main__'):
     kt.init(device="cuda:0", nhead=8)
     for batch_size in [1]:
         for nhead in [1]:
-            for from_len in [512, 1024]:
-                for to_len  in [34, 79]:
-                    print(batch_size)
+            for from_len in [40]:
+                for to_len  in [32]:
                     kt.run('test_launch_flash_attn_bw')
     """
     for batch_size in [128]:
