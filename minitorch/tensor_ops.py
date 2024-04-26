@@ -100,7 +100,8 @@ class TensorBackend:
         self.layernorm_bw = ops.layernorm_bw
 
         #Flash Attention
-        self.flash_attn_fw = ops.flash_attn_fw
+        # self.flash_attn_fw = ops.flash_attn_fw
+        self.flash_attn_2_fw = ops.flash_attn_2_fw
         self.flash_attn_bw = ops.flash_attn_bw
 
 
@@ -258,6 +259,10 @@ class SimpleOps(TensorOps):
 
     @staticmethod
     def flash_attn_bw():
+        raise NotImplementedError("Not implemented in this assignment")
+
+    @staticmethod
+    def flash_attn_2_fw():
         raise NotImplementedError("Not implemented in this assignment")
         
     is_cuda = False
