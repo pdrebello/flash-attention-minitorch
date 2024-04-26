@@ -38,6 +38,7 @@ from .tensor_functions import (
     Attn_Softmax,
     LayerNorm,
     Flash_Attn,
+    Flash_Attn_2,
 )
 
 if TYPE_CHECKING:
@@ -419,6 +420,9 @@ class Tensor:
 
     def flash_attn(self, k: Tensor, v: Tensor, causal_mask: bool=False) -> Tensor:
         return Flash_Attn.apply(self, k, v, tensor(causal_mask))
+    
+    def flash_attn_2(self, k: Tensor, v: Tensor, causal_mask: bool=False) -> Tensor:
+        return Flash_Attn_2.apply(self, k, v, tensor(causal_mask))
     
     def attn_softmax(self, mask: Tensor) -> Tensor:
       return Attn_Softmax.apply(self, mask)

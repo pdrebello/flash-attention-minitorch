@@ -28,6 +28,7 @@ lib = ctypes.CDLL("minitorch/cuda_kernels/combine.so")
 lib_softmax = ctypes.CDLL("minitorch/cuda_kernels/softmax_kernel.so")
 lib_layernorm = ctypes.CDLL("minitorch/cuda_kernels/layernorm_kernel.so")
 lib_flash_attn_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_fw.so")
+lib_flash_attn_2_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_2_fw.so")
 lib_flash_attn_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_bw.so")
 datatype = np.float32
 
@@ -557,6 +558,63 @@ class CudaKernelOps(TensorOps):
       lib_flash_attn_fw.launch_flash_attn_fw.restype = None
 
       lib_flash_attn_fw.launch_flash_attn_fw(
+        q._tensor._storage,
+        k._tensor._storage,
+        v._tensor._storage,
+        out._tensor._storage,
+        l._tensor._storage,
+        m._tensor._storage,
+        batch_size * nhead,
+        from_len,
+        to_len,
+        causal_mask,
+        stream
+      ) 
+      out = out.view(batch_size, nhead, from_len, to_len) 
+      l = l.view(batch_size, nhead, from_len) 
+      m = m.view(batch_size, nhead, from_len) 
+      
+      return out, l, m
+
+    @staticmethod
+    def flash_attn_2_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor):   
+      causal_mask = int(causal_mask._tensor._storage.item()) == 1
+      batch_size, nhead, from_len, to_len = q.shape
+      assert(q.shape == k.shape)
+      assert(q.shape == v.shape)
+      assert((q._tensor._strides - k._tensor._strides).sum() ==0)
+      assert((q._tensor._strides - v._tensor._strides).sum() ==0)
+      stream = torch.cuda.current_stream().cuda_stream
+        
+      out = q.zeros(q.shape)
+      l = k.zeros((batch_size, nhead, from_len))
+      m = tensor_from_numpy(np.ones(l.shape) * (-np.finfo(datatype).max), backend=q.backend)
+      #m = v.zeros((batch_size, nhead, from_len)) -np.finfo(datatype).max 
+        
+      q = q.contiguous().view(np.prod(q.shape[:-2]), q.shape[-2], q.shape[-1])
+      k = k.contiguous().view(np.prod(k.shape[:-2]), k.shape[-2], k.shape[-1])
+      v = v.contiguous().view(np.prod(v.shape[:-2]), v.shape[-2], v.shape[-1])
+      out = out.contiguous().view(np.prod(out.shape[:-2]), out.shape[-2], out.shape[-1])
+      l = l.contiguous().view(np.prod(l.shape[:-2]), l.shape[-2], l.shape[-1])
+      m = m.contiguous().view(np.prod(m.shape[:-2]), m.shape[-2], m.shape[-1])
+        
+
+      lib_flash_attn_2_fw.launch_flash_attn_2_fw.argtypes = [
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # out
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # l
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # m
+        ctypes.c_int, # batch_size
+        ctypes.c_int, # from_len
+        ctypes.c_int, # to_len
+        ctypes.c_bool, # to_len
+        ctypes.c_void_p
+      ]
+      lib_flash_attn_2_fw.launch_flash_attn_2_fw.restype = None
+
+      lib_flash_attn_2_fw.launch_flash_attn_2_fw(
         q._tensor._storage,
         k._tensor._storage,
         v._tensor._storage,
