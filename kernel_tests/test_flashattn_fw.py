@@ -78,7 +78,7 @@ def test_launch_flash_attn_fw():
     k_mt = minitorch.tensor(k.permute(0,1,3,2).clone().tolist(), backend=backend, requires_grad=True)
     v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
     
-    start_time = time.time()
+    start_time = time.time()    
     drop = minitorch.tensor_from_numpy(np.ones((from_len, from_len), dtype=datatype), backend=backend)
     res = (q_mt @ k_mt)/np.sqrt(to_len)
     if(args.mask):
@@ -110,20 +110,22 @@ def test_launch_flash_attn_fw():
 
     for batch_idx in range(batch_size):
         for head in range(nhead):
-            cust_out[batch_idx, head, :, :],_,_ = flash_attention2(q[batch_idx, head, :, :].cpu(), k[batch_idx, head, :, :].cpu(), v[batch_idx, head, :, :].cpu())
+            cust_out[batch_idx, head, :, :],_ = flash_attention2(q[batch_idx, head, :, :].cpu(), k[batch_idx, head, :, :].cpu(), v[batch_idx, head, :, :].cpu())
     end_time = time.time()
 
     return [
         cust_out,
     ], end_time - start_time
-      
-  return flash_attention_minitorch, attention_minitorch #flash_attention_torch #
+
+  return flash_attention_minitorch, attention_minitorch #attention_minitorch #flash_attention_torch #
+  #return flash_attention_minitorch, attention_minitorch #flash_attention_torch #
 
 
 
 if(__name__ == '__main__'):
     parser = argparse.ArgumentParser(description='mask, dropout, flash attention 2')
     parser.add_argument('--mask', action='store_true', help='test causal masking')
+    parser.add_argument('--N', type=int)
     args = parser.parse_args()
     
     kt.init(device="cuda:0", nhead=8)
@@ -142,14 +144,17 @@ if(__name__ == '__main__'):
     #        for from_len in [40]:
     #            for to_len  in [15]:
     #                kt.run('test_launch_flash_attn_fw')
-    for batch_size in [1]:
-        for nhead in [1]:
-            #for from_len in [3, 40, 90]:
-            #    for to_len  in [3, 17, 256]:
-            for from_len in [89]: #, 3, 8, 35, 1024]:
-                for to_len  in [24]:
+    kt.init(device="cuda:0", nhead=8)
+    for batch_size in [8]:
+        for nhead in [8]:
+            for from_len in [args.N]: 
+                for to_len  in [64]:
                     #assert(to_len * 4 <= 1024)
-                    kt.run('test_launch_flash_attn_fw')
+                    try:
+                        kt.run('test_launch_flash_attn_fw')
+                        print("", end="", flush=True)
+                    except:
+                        pass
     
     #batch_size, nhead, from_len, to_len = 2, 2, 489, 13
     #kt.run('test_launch_flash_attn_fw')

@@ -120,6 +120,32 @@ def test_launch_flash_attn_bw():
       #kt.norm_res_list(
     return [dq, dk,dv], end_time - start_time
 
+  #### PYTHON FLASH ATTENTION BACKWARD FROM NOTEBOOK ####
+  def flash_attention2_torch():
+    start_time = time.time()
+      
+    out = kt.zeros((batch_size, nhead, from_len, to_len))
+    l = kt.zeros((batch_size, nhead, from_len))
+    m = kt.zeros((batch_size, nhead, from_len))
+
+    dq = kt.rand((batch_size, nhead, from_len, to_len))
+    dk = kt.rand((batch_size, nhead, from_len, to_len))
+    dv = kt.rand((batch_size, nhead, from_len, to_len))
+    start_time = time.time()
+    for batch_idx in range(batch_size):
+        for head_idx in range(nhead):
+            out[batch_idx, head_idx, :, :],l[batch_idx, head_idx, :] = flash_attention2(q[batch_idx, head_idx, :, :], \
+                                                     k[batch_idx, head_idx, :, :], v[batch_idx, head_idx, :, :])
+
+    for batch_idx in range(batch_size):
+        for head_idx in range(nhead):
+            dq[batch_idx, head_idx, :, :], dk[batch_idx, head_idx, :, :], dv[batch_idx, head_idx, :, :] = flash_attention2_backward(q[batch_idx, head_idx, :, :],\
+                                                  k[batch_idx, head_idx, :, :], v[batch_idx, head_idx, :, :], \
+                                                  out[batch_idx, head_idx, :, :], out_grad[batch_idx, head_idx, :, :],
+                                                  l[batch_idx, head_idx, :])
+    end_time = time.time()
+      #kt.norm_res_list(
+    return [dq, dk,dv], end_time - start_time
 
   #### PYTHON FLASH ATTENTION BACKWARD FROM NOTEBOOK ####
   def flash_attention2_torch():
@@ -181,14 +207,22 @@ def test_launch_flash_attn_bw():
 if(__name__ == '__main__'):
     parser = argparse.ArgumentParser(description='mask, dropout, flash attention 2')
     parser.add_argument('--mask', action='store_true', help='test causal masking')
+    parser.add_argument('--N', type=int)
     args = parser.parse_args()
+
     
     kt.init(device="cuda:0", nhead=8)
-    for batch_size in [1]:
-        for nhead in [1]:
-            for from_len in [40]:
-                for to_len  in [32]:
-                    kt.run('test_launch_flash_attn_bw')
+    for batch_size in [8]:
+        for nhead in [8]:
+            for from_len in [args.N]: 
+                for to_len  in [64]:
+                    #assert(to_len * 4 <= 1024)
+                    try:
+                        kt.run('test_launch_flash_attn_bw')
+                        print("", end="", flush=True)
+                    except:
+                        pass
+    
     """
     for batch_size in [128]:
         for nhead in [8]:
