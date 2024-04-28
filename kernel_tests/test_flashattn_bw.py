@@ -34,33 +34,6 @@ def test_launch_flash_attn_bw():
   k = kt.rand((batch_size, nhead, from_len, to_len))
   v = kt.rand((batch_size, nhead, from_len, to_len))
 
-  ### OUR SOLUTION ####
-  def flash_attention_minitorch():
-    q_mt = minitorch.tensor(q.clone().tolist(), backend=backend, requires_grad=True)
-    k_mt = minitorch.tensor(k.clone().tolist(), backend=backend, requires_grad=True)
-    v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
-    out_grad_mt = minitorch.tensor(out_grad.clone().tolist(), backend=backend, requires_grad=True)
-
-    out_mt = q_mt.flash_attn(k_mt, v_mt, args.mask)
-
-    start_time = time.time()
-    #out_grad_mt = minitorch.tensor(out_grad.clone().tolist(), backend=backend, requires_grad=True)
-    #out_mt = minitorch.tensor(out.clone().tolist(), backend=backend, requires_grad=True)
-    #l_mt = minitorch.tensor(l.clone().tolist(), backend=backend, requires_grad=True)
-    #m_mt = minitorch.tensor(m.clone().tolist(), backend=backend, requires_grad=True)
-      
-    start_time = time.time()
-    #dq,dk,dv = out_mt.lauch_flash_attn_bw(q_mt, k_mt, v_mt, out_mt, out_grad_mt, l_mt, m_mt)
-    out_mt.backward(out_grad_mt)
-    end_time = time.time()
-    dq = torch.tensor(q_mt.grad.to_numpy().astype(datatype)).cuda()
-    dk = torch.tensor(k_mt.grad.to_numpy().astype(datatype)).cuda()
-    dv = torch.tensor(v_mt.grad.to_numpy().astype(datatype)).cuda()
-
-    return [
-        dq,dk,dv
-    ], end_time - start_time
-
   #### TORCH BACKPROP #####
   def attention_torch():
     out = kt.zeros((batch_size, nhead, from_len, to_len))
@@ -184,13 +157,10 @@ def test_launch_flash_attn_bw():
     out_grad_mt = minitorch.tensor(out_grad.clone().tolist(), backend=backend, requires_grad=True)
 
     drop = minitorch.tensor_from_numpy(np.ones((from_len, from_len),dtype=datatype), backend=backend)
-    #mask = minitorch.tensor_from_numpy(np.zeros((from_len, from_len),dtype=datatype), backend=backend)
     res = (q_mt @ k_mt)/np.sqrt(to_len)
-    if(args.mask):
-        mask_mt = create_causal_mask(batch_size, nhead, from_len, to_len, q_mt.backend)
-        res += mask_mt
+    mask_mt = create_causal_mask(batch_size, nhead, from_len, to_len, q_mt.backend)
+    res += mask_mt
     result = (drop * minitorch.nn.softmax(res , dim=3)) @ v_mt
-    #result = (minitorch.softmax(((q_mt @ k_mt)/np.sqrt(to_len) + mask) , dim=3) * drop) @ v_mt
 
     start_time = time.time()
     result = result.sum()
@@ -202,40 +172,63 @@ def test_launch_flash_attn_bw():
 
     
     return [dq, dk,dv], end_time - start_time
-  return flash_attention_minitorch, attention_minitorch #flash_attention_torch #
+
+  ### OUR SOLUTION ####
+  def flash_attention_minitorch(causal=False, flash2=False):
+    q_mt = minitorch.tensor(q.clone().tolist(), backend=backend, requires_grad=True)
+    k_mt = minitorch.tensor(k.clone().tolist(), backend=backend, requires_grad=True)
+    v_mt = minitorch.tensor(v.clone().tolist(), backend=backend, requires_grad=True)
+    out_grad_mt = minitorch.tensor(out_grad.clone().tolist(), backend=backend, requires_grad=True)
+
+    if(flash2):
+        out_mt = q_mt.flash_attn2(k_mt, v_mt, causal_mask=True) 
+    elif(causal):
+        out_mt = q_mt.flash_attn_causal(k_mt, v_mt, causal_mask=True) 
+    else:
+        out_mt = q_mt.flash_attn(k_mt, v_mt, causal_mask=True)
+
+    start_time = time.time()
+    out_mt.backward(out_grad_mt)
+    end_time = time.time()
+    dq = torch.tensor(q_mt.grad.to_numpy().astype(datatype)).cuda()
+    dk = torch.tensor(k_mt.grad.to_numpy().astype(datatype)).cuda()
+    dv = torch.tensor(v_mt.grad.to_numpy().astype(datatype)).cuda()
+
+    return [ dq,dk,dv], end_time - start_time
+      
+  def flash_attention_causal_minitorch():
+      return flash_attention_minitorch(causal=True)
+      
+  def flash_attention2_minitorch():
+      return flash_attention_minitorch(flash2 = True)
+
+  if(args.flash2): 
+      return flash_attention2_minitorch, attention_minitorch 
+  elif(args.causal):
+      return flash_attention_causal_minitorch, attention_minitorch 
+  else:
+      return flash_attention_minitorch, attention_minitorch 
+
 
 if(__name__ == '__main__'):
     parser = argparse.ArgumentParser(description='mask, dropout, flash attention 2')
-    parser.add_argument('--mask', action='store_true', help='test causal masking')
     parser.add_argument('--N', type=int)
+    parser.add_argument('--flash2', action='store_true')
+    parser.add_argument('--causal', action='store_true')
     args = parser.parse_args()
 
-    
     kt.init(device="cuda:0", nhead=8)
-    for batch_size in [8]:
+    #batch_size = int(8192p/args.N)
+    #batch_size = int(256/args.N)
+    batch_size = 1
+    for batch_size in [batch_size]:
         for nhead in [8]:
             for from_len in [args.N]: 
                 for to_len  in [64]:
-                    #assert(to_len * 4 <= 1024)
                     try:
                         kt.run('test_launch_flash_attn_bw')
                         print("", end="", flush=True)
-                    except:
+                    except Exception as e:
+                        import traceback
+                        print(traceback.format_exc())
                         pass
-    
-    """
-    for batch_size in [128]:
-        for nhead in [8]:
-            for from_len in [1, 2, 4, 8, 16, 32, 64, 128, 256]:
-                for to_len  in [1, 2, 4, 8, 15]:
-                    kt.run('test_launch_flash_attn_bw')
-    
-    for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
-        for nhead in [1]:
-            for from_len in [40]:
-                for to_len  in [15]:
-                    kt.run('test_launch_flash_attn_bw')
-    """
-    #kt.run(
-    #  'test_launch_flash_attn_bw'
-    #)

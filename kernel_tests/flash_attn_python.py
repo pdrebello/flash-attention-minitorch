@@ -60,7 +60,7 @@ def flash_attention2(Q, K, V):
 
     N, d = Q.shape
     tau = np.sqrt(1.0/d)
-    B_c = 2
+    B_c = 4
     B_r = min(B_c, d)
 
     O = torch.zeros_like(Q, device=Q.device)
@@ -80,12 +80,11 @@ def flash_attention2(Q, K, V):
             V_j = V[j * B_c:(j + 1) * B_c]
   
             S_ij = tau * (Q_i @ K_j.T) 
-
             m_i_prev = m_i.clone()
             m_i = torch.max(m_i, torch.max(S_ij, dim=1).values)
             P_ij = torch.exp(S_ij - m_i[:, None]) 
             l_i = torch.exp(m_i_prev - m_i)*l_i + torch.sum(P_ij, dim=1)
-
+            
             if(j == 0):
                 O_i = P_ij @ V_j
             else:
@@ -95,6 +94,7 @@ def flash_attention2(Q, K, V):
         L_i = m_i + torch.log(l_i)
         O[i * B_r:(i + 1) * B_r] = O_i
         L[i * B_r:(i + 1) * B_r] = L_i
+    #print(L)
     return O, L
 
 def flash_attention_backward(Q, K, V, O_flash, dO, l, m): 

@@ -83,10 +83,10 @@ kt.init(device="cuda:0", nhead=8)
 #        for from_len in [40]:
 #            for to_len  in [15]:
 #                kt.run('test_launch_flash_attn_comb')
-for batch_size in [16]:
+for batch_size in [128]:
     for nhead in [8]:
-        for from_len in [2048]:
-            for to_len  in [63]:
+        for from_len in [40]:
+            for to_len  in [32]:
                 kt.run('test_launch_flash_attn_comb')
 #kt.run(
 #  'test_launch_flash_attn_bw'
