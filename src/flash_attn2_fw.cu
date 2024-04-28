@@ -10,7 +10,7 @@
 
 #include <cooperative_groups.h>
 #define BASE_THREAD_NUM 32
-#define TILE_SIZE 1280
+#define TILE_SIZE 2024
 #define MBY4D 16
 
 namespace cg = cooperative_groups;
@@ -64,8 +64,8 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
 #ifdef TIME
     clock_t start_time, end_time;
 #endif    
-    
-    for(int i = 0; i < T_r; i++){
+    int i = blockIdx.y;
+    //for(int i = 0; i < T_r; i++){
         // Loading
         for(int read_block=0; read_block < B_r_blocks; read_block++){
             int tidx_ = read_block * BASE_THREAD_NUM + tidx;
@@ -293,7 +293,7 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
             }
         }
         __syncthreads();
-    }
+    //}
 }
 
 
@@ -339,7 +339,10 @@ void launch_flash_attn_fw(
     cudaMemcpy(d_l, l, batch * N * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_m, m, batch * N * sizeof(float), cudaMemcpyHostToDevice);
 
-    dim3 grid_dim(batch);  // batch_size x num_heads
+    int B_r = min(MBY4D, d); 
+    int T_r = (N + B_r - 1)/ B_r;
+    
+    dim3 grid_dim(batch, T_r);  // batch_size x num_heads
     dim3 block_dim(BASE_THREAD_NUM, BASE_THREAD_NUM);
 
     flash_attn_fw<float><<<grid_dim, block_dim, 0, stream>>>(d_q, d_k, d_v, d_out, d_l, d_m, batch, N, d, causal_mask);

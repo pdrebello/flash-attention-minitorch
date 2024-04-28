@@ -214,7 +214,7 @@ __global__ void MatrixMultiplyKernel(
 
     float res = 0;
     for(int k = 0;k<(n+TILE-1)/TILE;k++){
-        if(k * TILE + threadIdx.y < n){
+        if(k * TILE + threadIdx.y < n && row < m){
             index[0] = batch;
             index[1] = row;
             index[2] = k * TILE + threadIdx.y;
@@ -224,7 +224,7 @@ __global__ void MatrixMultiplyKernel(
         else
             a_shared[threadIdx.x][threadIdx.y] = 0;
 
-        if(k * TILE + threadIdx.x < n){
+        if(k * TILE + threadIdx.x < n && col < p){
             index[0] = batch;
             index[1] = k * TILE + threadIdx.x;
             index[2] = col;

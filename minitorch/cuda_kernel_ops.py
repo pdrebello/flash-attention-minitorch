@@ -29,6 +29,10 @@ lib_softmax = ctypes.CDLL("minitorch/cuda_kernels/softmax_kernel.so")
 lib_layernorm = ctypes.CDLL("minitorch/cuda_kernels/layernorm_kernel.so")
 lib_flash_attn_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_fw.so")
 lib_flash_attn_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_bw.so")
+lib_flash_attn2_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn2_fw.so")
+lib_flash_attn2_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn2_bw.so")
+lib_flash_attn_causal_fw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_causal_fw.so")
+lib_flash_attn_causal_bw = ctypes.CDLL("minitorch/cuda_kernels/flash_attn_causal_bw.so")
 datatype = np.float32
 
 # function map
@@ -518,9 +522,10 @@ class CudaKernelOps(TensorOps):
 
         return inp_grad, gamma_grad, betta_grad
       #   END ASSIGN3_2
-      
+
+
     @staticmethod
-    def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor):   
+    def flash_attn_fw_generic(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor, generic_lib):   
       causal_mask = int(causal_mask._tensor._storage.item()) == 1
       batch_size, nhead, from_len, to_len = q.shape
       assert(q.shape == k.shape)
@@ -541,7 +546,7 @@ class CudaKernelOps(TensorOps):
       l = l.contiguous().view(np.prod(l.shape[:-2]), l.shape[-2], l.shape[-1])
       m = m.contiguous().view(np.prod(m.shape[:-2]), m.shape[-2], m.shape[-1])
         
-      lib_flash_attn_fw.launch_flash_attn_fw.argtypes = [
+      generic_lib.launch_flash_attn_fw.argtypes = [
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v
@@ -554,9 +559,9 @@ class CudaKernelOps(TensorOps):
         ctypes.c_bool, # to_len
         ctypes.c_void_p
       ]
-      lib_flash_attn_fw.launch_flash_attn_fw.restype = None
+      generic_lib.launch_flash_attn_fw.restype = None
 
-      lib_flash_attn_fw.launch_flash_attn_fw(
+      generic_lib.launch_flash_attn_fw(
         q._tensor._storage,
         k._tensor._storage,
         v._tensor._storage,
@@ -576,7 +581,7 @@ class CudaKernelOps(TensorOps):
       return out, l, m
 
     @staticmethod
-    def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor):
+    def flash_attn_bw_generic(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor, generic_lib):
       #   BEGIN ASSIGN3_1     
       causal_mask_ = int(causal_mask._tensor._storage.item()) == 1        
       batch_size, nhead, from_len, to_len = q.shape
@@ -605,7 +610,7 @@ class CudaKernelOps(TensorOps):
       k_grad = k.zeros(k.shape)
       v_grad = v.zeros(v.shape)
         
-      lib_flash_attn_bw.launch_flash_attn_bw.argtypes = [
+      generic_lib.launch_flash_attn_bw.argtypes = [
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # q
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # k
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'), # v
@@ -622,9 +627,9 @@ class CudaKernelOps(TensorOps):
         ctypes.c_bool, # causal_mask
         ctypes.c_void_p
       ]
-      lib_flash_attn_bw.launch_flash_attn_bw.restype = None
+      generic_lib.launch_flash_attn_bw.restype = None
 
-      lib_flash_attn_bw.launch_flash_attn_bw(
+      generic_lib.launch_flash_attn_bw(
         q._tensor._storage,
         k._tensor._storage,
         v._tensor._storage,
@@ -647,4 +652,27 @@ class CudaKernelOps(TensorOps):
       
       return q_grad, k_grad, v_grad, causal_mask
 
+    @staticmethod
+    def flash_attn_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor): 
+        return CudaKernelOps.flash_attn_fw_generic(q, k, v, causal_mask, lib_flash_attn_fw)
+        
+    @staticmethod
+    def flash_attn_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor):
+        return CudaKernelOps.flash_attn_bw_generic(q, k, v, out, out_grad, l, m, causal_mask, lib_flash_attn_bw)
+     
+    @staticmethod
+    def flash_attn2_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor):
+        return CudaKernelOps.flash_attn_fw_generic(q, k, v, causal_mask, lib_flash_attn2_fw)
+        
+    @staticmethod
+    def flash_attn2_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor): 
+        return CudaKernelOps.flash_attn_bw_generic(q, k, v, out, out_grad, l, m, causal_mask, lib_flash_attn2_bw)
 
+    @staticmethod
+    def flash_attn_causal_fw(q: Tensor, k: Tensor, v: Tensor, causal_mask: Tensor):
+        return CudaKernelOps.flash_attn_fw_generic(q, k, v, causal_mask, lib_flash_attn_causal_fw)
+        
+    @staticmethod
+    def flash_attn_causal_bw(q: Tensor, k: Tensor, v: Tensor, out: Tensor, out_grad: Tensor, l: Tensor, m: Tensor, causal_mask: Tensor): 
+        return CudaKernelOps.flash_attn_bw_generic(q, k, v, out, out_grad, l, m, causal_mask, lib_flash_attn_causal_bw)
+     

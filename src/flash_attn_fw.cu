@@ -34,15 +34,7 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     l += batch_idx * N;
     m += batch_idx * N;
     
-    /*if(batch_idx == 1 && tidx == 0 && tidx_y == 0){
-        printf("Batch %d: %f, %f, %f\n", batch_idx, q[0], k[0], v[0]);
-        printf("Batch %d: %f, %f, %f, %f\n", batch_idx, out_grad[0], out[0], l[0], m[0]);
-        printf("Batch %d: %f, %f, %f\n", batch_idx, q_grad[0], k_grad[0], v_grad[0]);
-    }*/
-    //printf("%f\n", l[0]);
-    
-    float tau = sqrt(1.0/d);
-    
+    float tau = sqrt(1.0/d);    
     int B_c = MBY4D; //BASE_THREAD_NUM; //on_chip_memory_size / (4 * d);  // Using 4 bytes per float
     int B_r = min(B_c, d); //min(on_chip_memory_size / (4 * d), d);
     int T_r = (N + B_r - 1)/ B_r;
@@ -75,16 +67,17 @@ __global__ void flash_attn_fw(T *q, T *k, T *v, T *out, T *l, T *m, int batch, i
     for(int j = 0; j < T_c; j++){
         // Loading
         for(int read_block = 0;read_block < B_c_blocks; read_block++){
-            int tidx_ = read_block * BASE_THREAD_NUM + tidx;
-            
-            for(int y = 0; y < d; y++){
-                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y == 0){
-                    Kj[tidx_ * d + y] = k[(j * B_c + tidx_) * d + y];
-                    Vj[tidx_ * d + y] = v[(j * B_c + tidx_) * d + y];
+            for(int read_block_y = 0; read_block_y < d_blocks; read_block_y++){
+                int tidx_ = read_block * BASE_THREAD_NUM + tidx;
+                int tidx_y_ = read_block_y * BASE_THREAD_NUM + tidx_y;
+                
+                if(tidx_ < B_c && j * B_c + tidx_ < N && tidx_y_ < d){
+                    Kj[tidx_ * d + tidx_y_] = k[(j * B_c + tidx_) * d + tidx_y_];
+                    Vj[tidx_ * d + tidx_y_] = v[(j * B_c + tidx_) * d + tidx_y_];
                 }
                 else if(tidx_ < B_c && tidx_y == 0){
-                    Kj[tidx_ * d + y] = 0;
-                    Vj[tidx_ * d + y] = 0;
+                    Kj[tidx_ * d + tidx_y_] = 0;
+                    Vj[tidx_ * d + tidx_y_] = 0;
                 }
             }
         }
