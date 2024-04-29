@@ -21,7 +21,8 @@ datatype = np.float32
 
 
 class MultiHeadAttention(Module):
-    def __init__(self, n_embd: int, n_head: int, causal: bool=False, p_dropout: float=0.1, bias: bool=True, backend: TensorBackend=None, use_fused_kernel: bool=False):
+    def __init__(self, n_embd: int, n_head: int, causal: bool=False, p_dropout: float=0.1, bias: bool=True, backend: TensorBackend=None, use_fused_kernel: bool=False, 
+                 use_flash_attention: bool=False):
         super().__init__()
         """Implements Multi-Head Attention as described in "Attention Is All You Need"
 
@@ -45,6 +46,7 @@ class MultiHeadAttention(Module):
         self.causal    = causal
         self.attn_hidden_dim = n_embd // n_head
         self.use_fused_kernel = use_fused_kernel
+        self.use_flash_attention=use_flash_attention
 
         # COPY FROM ASSIGN2_4
         self.q_projection = Linear(self.n_embd, self.n_embd, bias, backend)
@@ -78,7 +80,10 @@ class MultiHeadAttention(Module):
         ### BEGIN YOUR SOLUTION
         x = x.view(batch_size * seq_len, n_embd)
         q = self.q_projection(x).view(batch_size, seq_len, self.n_head, self.attn_hidden_dim).permute(0, 2, 1, 3) 
-        kT = self.k_projection(x).view(batch_size, seq_len, self.n_head, self.attn_hidden_dim).permute(0, 2, 3, 1) 
+        if(self.use_flash_attention):
+            kT = self.k_projection(x).view(batch_size, seq_len, self.n_head, self.attn_hidden_dim).permute(0, 2, 1, 3) 
+        else:
+            kT = self.k_projection(x).view(batch_size, seq_len, self.n_head, self.attn_hidden_dim).permute(0, 2, 3, 1) 
         v = self.v_projection(x).view(batch_size, seq_len, self.n_head, self.attn_hidden_dim).permute(0, 2, 1, 3) 
         ### END YOUR SOLUTION
         return q, kT, v
@@ -99,12 +104,21 @@ class MultiHeadAttention(Module):
             output : Tensor of shape (batch_size, seq_len, n_embd)
         """
         batch_size, num_head, queries_len, q_dim = q.shape
-        _, _, k_dim, _ = kT.shape
+        _, _, k_dim, k_dim_flash = kT.shape
         _, _, _, v_dim = v.shape
-        assert q_dim == k_dim == v_dim
+        if self.use_flash_attention:
+            assert q_dim == k_dim_flash == v_dim
+        else:
+            assert q_dim == k_dim == v_dim
         result = None
+
+        q = q.contiguous()
+        kT = kT.contiguous()
+        v = v.contiguous()
         
-        if not self.use_fused_kernel:
+        if(self.use_flash_attention):
+            result = q.flash_attn2(kT, v, self.causal)
+        elif not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
             if(self.causal):
                 M = self.create_causal_mask(batch_size, num_head, queries_len)
@@ -189,7 +203,8 @@ class FeedForward(Module):
         return x
 
 class TransformerLayer(Module):
-    def __init__(self, n_embd: int, n_head: int, p_dropout: float=0.1, ln_eps: float=1e-8, bias: bool=True, backend: TensorBackend=None, use_fused_kernel: bool=False):
+    def __init__(self, n_embd: int, n_head: int, p_dropout: float=0.1, ln_eps: float=1e-8, bias: bool=True, backend: TensorBackend=None, use_fused_kernel: bool=False,
+                use_flash_attention: bool=False):
         super().__init__()
         """A Transformer Layer in a Pre-LN Transformer.
 
@@ -209,6 +224,7 @@ class TransformerLayer(Module):
         
 
         self.use_fused_kernel = use_fused_kernel
+        self.use_flash_attention = use_flash_attention
         if not self.use_fused_kernel:
             ### BEGIN YOUR SOLUTION
             self.ln_1 = LayerNorm1d(n_embd, ln_eps, backend)
@@ -218,7 +234,7 @@ class TransformerLayer(Module):
             self.ln_1 = LayerNorm1dFused(n_embd, ln_eps, backend)
             self.ln_2 = LayerNorm1dFused(n_embd, ln_eps, backend)
             # END ASSIGN3_3
-        self.attention = MultiHeadAttention(n_embd, n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
+        self.attention = MultiHeadAttention(n_embd, n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel, use_flash_attention=use_flash_attention)
         self.ff = FeedForward(n_embd, p_dropout=p_dropout, bias=bias, backend=backend)
 
     def forward(self, x):
@@ -248,6 +264,7 @@ class DecoderLM(Module):
         bias: bool=True,
         backend: TensorBackend=None,
         use_fused_kernel: bool=False,
+        use_flash_attention: bool=False,
     ):
         super().__init__()
         """A Full Decoder-only Pre-LN Transformer with 4 Transformer Layers.
@@ -279,13 +296,13 @@ class DecoderLM(Module):
         self.token_embeddings    = Embedding(num_embeddings=self.n_vocab, embedding_dim=self.n_embd, backend=self.backend)
         self.position_embeddings = Embedding(num_embeddings=self.n_vocab, embedding_dim=self.n_embd, backend=self.backend)
         self.t_layer_1           = TransformerLayer(n_embd=self.n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=self.backend, 
-                                                   use_fused_kernel=use_fused_kernel)
+                                                   use_fused_kernel=use_fused_kernel, use_flash_attention=use_flash_attention)
         self.t_layer_2           = TransformerLayer(n_embd=self.n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=self.backend,
-                                                   use_fused_kernel=use_fused_kernel)
+                                                   use_fused_kernel=use_fused_kernel, use_flash_attention=use_flash_attention)
         self.t_layer_3           = TransformerLayer(n_embd=self.n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=self.backend,
-                                                   use_fused_kernel=use_fused_kernel)
+                                                   use_fused_kernel=use_fused_kernel, use_flash_attention=use_flash_attention)
         self.t_layer_4           = TransformerLayer(n_embd=self.n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=self.backend,
-                                                   use_fused_kernel=use_fused_kernel)
+                                                   use_fused_kernel=use_fused_kernel, use_flash_attention=use_flash_attention)
         self.dropout             = Dropout(p_dropout)
         if(not use_fused_kernel):
             self.ln                  = LayerNorm1d(self.n_embd, ln_eps, backend=self.backend)
@@ -294,6 +311,8 @@ class DecoderLM(Module):
         self.lm_head             = Linear(in_size=self.n_embd, out_size=self.n_vocab, bias=bias, backend=self.backend)
 
         self.use_fused_kernel = use_fused_kernel
+        self.use_flash_attention = use_flash_attention
+        self.n_positions = n_positions
         
     def forward(self, idx):
         """A Forward pass of a Decoder-only Transformer Language model.
