@@ -185,10 +185,12 @@ def train(model, optimizer, examples, n_samples, collate_fn, batch_size, desc):
     model.train()
     random.shuffle(examples)
     examples = examples[:n_samples]
-
+    forward_time = 0
+    backward_time = 0
+    opt_time = 0
+    iterations = 0
     for i in (prog_bar := tqdm.trange(
             0, len(examples), batch_size, desc=f'Training ({desc})')):
-        
         batch = collate_fn(examples=examples[i:i + batch_size])
         
         t0 = time.time()
@@ -202,16 +204,20 @@ def train(model, optimizer, examples, n_samples, collate_fn, batch_size, desc):
         optimizer.step()
         t3 = time.time()
 
-        # print(f"Forward: {t1 - t0}")
-        # print(f"Backward: {t2 - t1}")
-        # print(f"Opt.step: {t3 - t2}")
-
+        if(iterations > 1):
+            forward_time += t1 - t0
+            backward_time += t2 - t1
+            opt_time += t3 - t2      
+        
         batch_time = time.time() - t0
         prog_bar.set_postfix(
             tokens_per_sec=np.prod(batch['input_ids'].shape) / batch_time,
             loss=loss.item(),
             lr=optimizer.lr)
-
+        iterations +=1
+        if(iterations == 10):
+            break
+    print("N: {}, Forward Time: {}, Backward Time: {}, Opt Time: {}".format(model.n_positions, forward_time, backward_time, opt_time))
 
 def evaluate_loss(model, examples, batch_size, collate_fn, desc):
     """
@@ -318,13 +324,15 @@ def parse_args():
         
     parser = argparse.ArgumentParser()
     parser.add_argument('--use-fused-kernel', type=str2bool, default=False)
+    parser.add_argument('--use-flash-attention', type=str2bool, default=False)
+    parser.add_argument('--model-max-length', type=int)
     return parser.parse_args()
 
 
 def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
-         model_max_length=40,
+         model_max_length=1024,
          n_epochs=1,
-         batch_size=128,
+         batch_size=8,
          learning_rate=0.02,
          samples_per_epoch=20000,
          n_vocab=10000,
@@ -344,12 +352,13 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
         'n_vocab'     : n_vocab,  # vocab_size
         'n_embd'      : n_embd,   # n_embed
         'n_head'      : 8,    # n_head
-        'n_positions' : model_max_length,  # n_ctx == n_positions
+        'n_positions' : args.model_max_length,  # n_ctx == n_positions
         # 'n_layer'     : 4,    # n_layer
         'p_dropout'   : 0.1,  # x_pdrop
         'ln_eps'      : 1e-5, # layer_norm_epsilon
         'backend'     : backend,
-        'use_fused_kernel': args.use_fused_kernel
+        'use_fused_kernel': args.use_fused_kernel,
+        'use_flash_attention': args.use_flash_attention
     }
 
     model = DecoderLM(**config)
@@ -370,9 +379,10 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
         src_key=src_key,
         tgt_key=tgt_key,
         tokenizer=tokenizer,
-        model_max_length=model_max_length,
+        model_max_length=args.model_max_length,
         backend=backend)
-    
+
+    batch_size = int((128 * 40 + args.model_max_length)/args.model_max_length)
     for epoch_idx in range(n_epochs):
         desc = f'epoch {epoch_idx} / {n_epochs}'
 
